@@ -1,0 +1,57 @@
+# Blueprint do Render para a API (Laravel).
+# Render → New → Blueprint → escolher este repositório.
+# Os valores marcados com "sync: false" são pedidos no painel do Render.
+services:
+  - type: web
+    name: smp-backend
+    runtime: docker
+    plan: free
+    region: frankfurt
+    healthCheckPath: /up
+    envVars:
+      - key: APP_NAME
+        value: SMP
+      - key: APP_ENV
+        value: production
+      - key: APP_DEBUG
+        value: "false"
+      - key: APP_KEY
+        sync: false            # gerar localmente: php artisan key:generate --show
+      - key: APP_URL
+        sync: false            # ex.: https://smp-backend.onrender.com
+      - key: FRONTEND_URL
+        sync: false            # ex.: https://smp-frontend.onrender.com
+      - key: APP_LOCALE
+        value: pt
+      - key: APP_FALLBACK_LOCALE
+        value: pt
+      - key: LOG_CHANNEL
+        value: stderr
+      - key: LOG_LEVEL
+        value: warning
+
+      # Base de dados Neon (PostgreSQL + PostGIS)
+      - key: DB_CONNECTION
+        value: pgsql
+      - key: DB_URL
+        sync: false            # postgresql://user:pass@ep-xxx.aws.neon.tech/neondb?sslmode=require
+      - key: DB_SSLMODE
+        value: require
+
+      - key: SESSION_DRIVER
+        value: array
+      - key: CACHE_STORE
+        value: database
+      - key: QUEUE_CONNECTION
+        value: sync
+      - key: FILESYSTEM_DISK
+        value: local
+
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_REDIRECT_URI
+        sync: false            # https://smp-backend.onrender.com/api/auth/google/callback
+      - key: OPENROUTESERVICE_API_KEY
+        sync: false
