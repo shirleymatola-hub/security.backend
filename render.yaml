@@ -6,7 +6,7 @@ services:
     name: smp-backend
     runtime: docker
     plan: free
-    region: frankfurt
+    region: ohio               # mesma região do Neon (aws us-east-2)
     healthCheckPath: /up
     envVars:
       - key: APP_NAME
