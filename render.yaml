@@ -55,3 +55,31 @@ services:
         sync: false            # https://smp-backend.onrender.com/api/auth/google/callback
       - key: OPENROUTESERVICE_API_KEY
         sync: false
+      - key: MAIL_MAILER
+        sync: false            # smtp para enviar emails reais (ex.: Gmail)
+      - key: MAIL_HOST
+        sync: false            # smtp.gmail.com
+      - key: MAIL_PORT
+        sync: false            # 587
+      - key: MAIL_USERNAME
+        sync: false            # conta@gmail.com
+      - key: MAIL_PASSWORD
+        sync: false            # palavra-passe de aplicação do Gmail
+      - key: MAIL_FROM_ADDRESS
+        sync: false            # conta@gmail.com
+      - key: SMS_DRIVER
+        value: log  # log | twilio | africastalking | http
+      - key: TWILIO_SID
+        sync: false
+      - key: TWILIO_TOKEN
+        sync: false
+      - key: TWILIO_FROM
+        sync: false
+      - key: AFRICASTALKING_USERNAME
+        sync: false
+      - key: AFRICASTALKING_API_KEY
+        sync: false
+      - key: SMS_HTTP_URL
+        sync: false
+      - key: SMS_HTTP_TOKEN
+        sync: false

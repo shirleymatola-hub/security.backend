@@ -6,12 +6,13 @@ use Database\Factories\UserFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Contracts\Translation\HasLocalePreference;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Laravel\Sanctum\HasApiTokens;
 use Spatie\Permission\Traits\HasRoles;
 
-class User extends Authenticatable
+class User extends Authenticatable implements HasLocalePreference
 {
     /** @use HasFactory<UserFactory> */
     use HasApiTokens, HasFactory, Notifiable, HasRoles;
@@ -68,6 +69,22 @@ class User extends Authenticatable
             'failed_attempts' => 'integer',
             'locked_until' => 'datetime',
         ];
+    }
+
+    /**
+     * Idioma das notificações enviadas a este utilizador (email/SMS).
+     */
+    public function preferredLocale(): ?string
+    {
+        return in_array($this->locale, ['pt', 'en'], true) ? $this->locale : null;
+    }
+
+    /**
+     * Telefone usado pelo canal de SMS (App\Notifications\Channels\SmsChannel).
+     */
+    public function routeNotificationForSms(): ?string
+    {
+        return $this->phone;
     }
 
     /**

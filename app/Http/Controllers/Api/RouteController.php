@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Services\IncidentJurisdictionService;
 use App\Services\OpenRouteService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -57,7 +58,7 @@ class RouteController extends Controller
         }
 
     }
-    public function nearestStation(Request $request)
+    public function nearestStation(Request $request, IncidentJurisdictionService $jurisdictions)
     {
         $request->validate([
             'lat' => 'required|numeric|between:-90,90',
@@ -65,20 +66,11 @@ class RouteController extends Controller
             'exclude_station_id' => 'nullable|integer',
         ]);
 
-        $lat = $request->lat;
-        $lng = $request->lng;
+        $lat = (float) $request->lat;
+        $lng = (float) $request->lng;
         $excludeId = $request->input('exclude_station_id');
 
-        $query = PoliceStation::where('is_active', true)
-            ->withinStudyArea()
-            ->select('*')
-            ->selectRaw(
-                "ST_Distance(
-                    geometry::geography,
-                    ST_SetSRID(ST_MakePoint(?, ?), 4326)::geography
-                ) AS distance",
-                [$lng, $lat]
-            );
+        $query = $this->stationsByDistance($lat, $lng)->withinStudyArea();
 
         if ($excludeId) {
             $query->where('id', '!=', $excludeId);
@@ -88,17 +80,126 @@ class RouteController extends Controller
             ->limit(5)
             ->get();
 
+        // Marca a(s) esquadra(s) com jurisdição sobre o ponto, para a interface as destacar.
+        $responsibleIds = $this->responsibleStationIds(
+            $jurisdictions->determinePoliceStationFromGeometry($lng, $lat)
+        );
+
         return response()->json([
-            'stations' => $stations->map(fn($s) => [
-                'id' => $s->id,
-                'name' => $s->name,
-                'address' => $s->address,
-                'phone' => $s->phone,
-                'latitude' => $s->latitude,
-                'longitude' => $s->longitude,
-                'distance' => round($s->distance, 2),
+            'stations' => $stations->map(fn($s) => $this->formatStation($s) + [
+                'is_responsible' => in_array($s->id, $responsibleIds, true),
             ])->values(),
+            'responsible_station_ids' => $responsibleIds,
             'query' => ['lat' => $lat, 'lng' => $lng],
         ]);
+    }
+
+    /**
+     * Esquadra responsável por um ponto segundo a área de jurisdição (bairro → jurisdição ativa).
+     *
+     * basis:
+     *   - jurisdiction           → o bairro tem uma única jurisdição ativa;
+     *   - jurisdiction_conflict  → o bairro tem várias jurisdições (ex.: Matola D): devolve a mais
+     *                              próxima dessas esquadras e as restantes em `alternatives`;
+     *   - nearest                → ponto fora da Área de Estudo ou bairro sem jurisdição: usa a
+     *                              esquadra ativa mais próxima.
+     */
+    public function responsibleStation(Request $request, IncidentJurisdictionService $jurisdictions): JsonResponse
+    {
+        $request->validate([
+            'lat' => 'required|numeric|between:-90,90',
+            'lng' => 'required|numeric|between:-180,180',
+        ]);
+
+        $lat = (float) $request->lat;
+        $lng = (float) $request->lng;
+
+        $result = $jurisdictions->determinePoliceStationFromGeometry($lng, $lat);
+        $candidateIds = $this->responsibleStationIds($result);
+
+        $stations = collect();
+        if ($candidateIds) {
+            $stations = $this->stationsByDistance($lat, $lng)
+                ->whereIn('id', $candidateIds)
+                ->orderBy('distance')
+                ->get();
+        }
+
+        if ($stations->isNotEmpty()) {
+            $basis = $result['conflict'] ? 'jurisdiction_conflict' : 'jurisdiction';
+        } else {
+            $basis = 'nearest';
+            $stations = $this->stationsByDistance($lat, $lng)
+                ->withinStudyArea()
+                ->orderBy('distance')
+                ->limit(3)
+                ->get();
+        }
+
+        if ($stations->isEmpty()) {
+            return response()->json(['message' => __('Nenhuma esquadra encontrada')], 404);
+        }
+
+        $station = $stations->first();
+        $messages = [
+            'jurisdiction' => __('Esquadra responsável pela área de jurisdição do bairro :bairro.', ['bairro' => $result['bairro']]),
+            'jurisdiction_conflict' => __('O bairro :bairro tem mais de uma esquadra com jurisdição; foi escolhida a mais próxima.', ['bairro' => $result['bairro']]),
+            'nearest' => __('O local não tem jurisdição definida; foi escolhida a esquadra mais próxima.'),
+        ];
+
+        return response()->json([
+            'station' => $this->formatStation($station),
+            'alternatives' => $stations->slice(1)->map(fn($s) => $this->formatStation($s))->values(),
+            'basis' => $basis,
+            'bairro' => $result['bairro'],
+            'message' => $messages[$basis],
+        ]);
+    }
+
+    /** Esquadras ativas com a distância (m) ao ponto indicado. */
+    private function stationsByDistance(float $lat, float $lng)
+    {
+        return PoliceStation::where('is_active', true)
+            ->select('*')
+            ->selectRaw(
+                "ST_Distance(
+                    geometry::geography,
+                    ST_SetSRID(ST_MakePoint(?, ?), 4326)::geography
+                ) AS distance",
+                [$lng, $lat]
+            );
+    }
+
+    /** IDs das esquadras com jurisdição, a partir do resultado do IncidentJurisdictionService. */
+    private function responsibleStationIds(array $result): array
+    {
+        if ($result['success']) {
+            return [(int) $result['police_station_id']];
+        }
+
+        if ($result['conflict']) {
+            return collect($result['multiple_jurisdictions'])
+                ->pluck('police_station_id')
+                ->filter()
+                ->map(fn($id) => (int) $id)
+                ->unique()
+                ->values()
+                ->all();
+        }
+
+        return [];
+    }
+
+    private function formatStation(PoliceStation $s): array
+    {
+        return [
+            'id' => $s->id,
+            'name' => $s->name,
+            'address' => $s->address,
+            'phone' => $s->phone,
+            'latitude' => $s->latitude,
+            'longitude' => $s->longitude,
+            'distance' => round($s->distance, 2),
+        ];
     }
 }

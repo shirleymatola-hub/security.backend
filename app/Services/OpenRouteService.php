@@ -45,10 +45,13 @@ class OpenRouteService
         ];
 
         try {
-            $response = Http::withHeaders([
-                'Authorization' => $this->apiKey,
-                'Content-Type' => 'application/json',
-            ])->timeout(60)->post($url, $payload);
+            $response = $this->post($url, $payload);
+
+            // 2010 = ponto sem estrada a menos de 350 m (ocorrências em quintais, mato, etc.):
+            // repete deixando o ORS procurar a estrada mais próxima sem limite de raio.
+            if ($response->failed() && (int) $response->json('error.code') === 2010) {
+                $response = $this->post($url, $payload + ['radiuses' => [-1, -1]]);
+            }
 
             if ($response->failed()) {
                 $error = $response->json('error', 'Unknown error');
@@ -66,6 +69,14 @@ class OpenRouteService
         } catch (\Exception $e) {
             throw $e;
         }
+    }
+
+    protected function post(string $url, array $payload): \Illuminate\Http\Client\Response
+    {
+        return Http::withHeaders([
+            'Authorization' => $this->apiKey,
+            'Content-Type' => 'application/json',
+        ])->timeout(60)->post($url, $payload);
     }
 
     /**

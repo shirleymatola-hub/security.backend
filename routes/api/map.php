@@ -38,6 +38,8 @@ Route::name('api.')->group(function () {
     Route::get('/categories', [IncidentController::class, 'categories'])->name('categories');
     //Route of nearest
     Route::get('/nearest-station', [RouteController::class, 'nearestStation']);
+    // Esquadra com jurisdição sobre o ponto (bairro → jurisdição), com recurso à mais próxima
+    Route::get('/responsible-station', [RouteController::class, 'responsibleStation']);
 
     // Route directions
     Route::match(['get', 'post'], '/route', [RouteController::class, 'index'])

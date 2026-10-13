@@ -76,6 +76,7 @@ class NotificationService
     public static function notifyNewIncident(Incident $incident): void
     {
         static::notifyCommanders($incident, NovaOcorrencia::class);
+        IncidentAlertService::newIncident($incident);
     }
 
     /**
@@ -86,6 +87,7 @@ class NotificationService
         $officer = User::find($officerId);
         if ($officer) {
             $officer->notify(new OcorrenciaAtribuida($incident));
+            IncidentAlertService::assigned($incident, $officer);
         }
     }
 
@@ -95,6 +97,7 @@ class NotificationService
     public static function notifyStatusChanged(Incident $incident, ?string $observation = null): void
     {
         static::notifyCommanders($incident, AtualizacaoOcorrencia::class, 'status_changed', $observation);
+        IncidentAlertService::statusChanged($incident, $observation);
     }
 
     /**
@@ -103,6 +106,7 @@ class NotificationService
     public static function notifyResolved(Incident $incident, ?string $observation = null): void
     {
         static::notifyCommanders($incident, AtualizacaoOcorrencia::class, 'resolved', $observation);
+        IncidentAlertService::statusChanged($incident, $observation);
     }
 
     /**
