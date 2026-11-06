@@ -7,6 +7,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
+use Illuminate\Support\Facades\DB;
 
 class Incident extends Model
 {
@@ -115,9 +116,24 @@ class Incident extends Model
      */
     public static function generateReferenceCode(): string
     {
-        $year = date('Y');
-        $lastIncident = self::whereYear('created_at', $year)->latest('id')->first();
-        $number = $lastIncident ? intval(substr($lastIncident->reference_code, -4)) + 1 : 1;
-        return sprintf('MC-%s-%04d', $year, $number);
+        $year = (int) date('Y');
+        $prefix = sprintf('MC-%d-', $year);
+
+        $maxExisting = (int) DB::table('incidents')
+            ->where('reference_code', 'like', $prefix . '%')
+            ->selectRaw("COALESCE(MAX(CAST(SUBSTRING(reference_code FROM '[0-9]+$') AS INTEGER)), 0) AS max_number")
+            ->first()
+            ->max_number;
+
+        $row = DB::selectOne('
+            INSERT INTO incident_reference_counters (year, last_number, created_at, updated_at)
+            VALUES (?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            ON CONFLICT (year) DO UPDATE
+            SET last_number = GREATEST(incident_reference_counters.last_number + 1, EXCLUDED.last_number),
+                updated_at = CURRENT_TIMESTAMP
+            RETURNING last_number
+        ', [$year, $maxExisting + 1]);
+
+        return sprintf('%s%04d', $prefix, (int) $row->last_number);
     }
 }

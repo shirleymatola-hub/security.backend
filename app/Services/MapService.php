@@ -29,14 +29,16 @@ class MapService
     /**
      * Get all incidents as GeoJSON for Leaflet
      */
-    public function getIncidentsGeoJson(?int $stationId = null, array $filters = [], ?int $assignedTo = null): array
+    public function getIncidentsGeoJson(?int $stationId = null, array $filters = [], ?int $assignedTo = null, bool $withinAreaDeEstudo = false): array
     {
         $bounds = config('map.bounds');
         $query = Incident::whereNotNull('latitude')
             ->whereNotNull('longitude')
             ->where('is_public', true);
 
-        if ($bounds) {
+        if ($withinAreaDeEstudo) {
+            AreaDeEstudoSpatialFilter::apply($query);
+        } elseif ($bounds) {
             $query->whereBetween('latitude', [$bounds['south_west']['lat'], $bounds['north_east']['lat']])
                 ->whereBetween('longitude', [$bounds['south_west']['lng'], $bounds['north_east']['lng']]);
         }
@@ -105,13 +107,18 @@ class MapService
     /**
      * Get police stations as GeoJSON
      */
-    public function getStationsGeoJson(?int $stationId = null, bool $mainOnly = false): array
+    public function getStationsGeoJson(?int $stationId = null, bool $mainOnly = false, bool $withinAreaDeEstudo = false): array
     {
         $query = PoliceStation::where('is_active', true)
             ->whereNotNull('latitude')
             ->whereNotNull('longitude')
-            ->withinStudyArea()
             ->with('district:id,name');
+
+        if ($withinAreaDeEstudo) {
+            AreaDeEstudoSpatialFilter::apply($query);
+        } else {
+            $query->withinStudyArea();
+        }
 
         if ($stationId) {
             $query->where('id', $stationId);
@@ -160,15 +167,21 @@ class MapService
     /**
      * Get SERNIC unit as GeoJSON (police stations with tipo_posto = 'Investigação Criminal')
      */
-    public function getSernicGeoJson(): array
+    public function getSernicGeoJson(bool $withinAreaDeEstudo = false): array
     {
-        $stations = PoliceStation::where('is_active', true)
+        $query = PoliceStation::where('is_active', true)
             ->whereNotNull('latitude')
             ->whereNotNull('longitude')
             ->where('tipo_posto', 'Investigação Criminal')
-            ->withinStudyArea()
-            ->with('district:id,name')
-            ->get();
+            ->with('district:id,name');
+
+        if ($withinAreaDeEstudo) {
+            AreaDeEstudoSpatialFilter::apply($query);
+        } else {
+            $query->withinStudyArea();
+        }
+
+        $stations = $query->get();
 
         $features = $stations->map(function ($station) {
             return [

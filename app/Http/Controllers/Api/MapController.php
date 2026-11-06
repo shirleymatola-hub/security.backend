@@ -33,7 +33,8 @@ class MapController extends Controller
     public function incidents(Request $request): JsonResponse
     {
         $filters = $request->only(['category_id', 'priority', 'status', 'neighborhood']);
-        $geoJson = $this->mapService->getIncidentsGeoJson(null, $filters);
+        $withinAreaDeEstudo = $request->boolean('area_de_estudo');
+        $geoJson = $this->mapService->getIncidentsGeoJson(null, $filters, null, $withinAreaDeEstudo);
 
         return response()->json($geoJson);
     }
@@ -54,7 +55,8 @@ class MapController extends Controller
     public function stations(Request $request): JsonResponse
     {
         $mainOnly = $request->boolean('main_only', false);
-        $geoJson = $this->mapService->getStationsGeoJson(null, $mainOnly);
+        $withinAreaDeEstudo = $request->boolean('area_de_estudo');
+        $geoJson = $this->mapService->getStationsGeoJson(null, $mainOnly, $withinAreaDeEstudo);
 
         return response()->json($geoJson);
     }
@@ -63,9 +65,10 @@ class MapController extends Controller
      * Get SERNIC unit as GeoJSON for the map layer.
      * Returns only police stations with tipo_posto = 'Investigação Criminal'.
      */
-    public function sernic(): JsonResponse
+    public function sernic(Request $request): JsonResponse
     {
-        $geoJson = $this->mapService->getSernicGeoJson();
+        $withinAreaDeEstudo = $request->boolean('area_de_estudo');
+        $geoJson = $this->mapService->getSernicGeoJson($withinAreaDeEstudo);
 
         return response()->json($geoJson);
     }

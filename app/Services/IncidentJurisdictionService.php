@@ -40,6 +40,9 @@ use Illuminate\Support\Facades\Log;
  */
 class IncidentJurisdictionService
 {
+    private const MATOLA_A_CANONICAL_AREA_ID = 1;
+    private const MATOLA_A_BAIRRO = 'Matola A';
+
     /**
      * Determine the police station responsible for an incident based on spatial jurisdiction.
      *
@@ -157,10 +160,13 @@ class IncidentJurisdictionService
     }
 
     /**
-     * Find the bairro (Area de Estudo) that contains the given point.
+     * Find the logical bairro (Area de Estudo) that contains the given point.
      *
      * Uses ST_Covers to check if the bairro polygon covers the incident point.
-     * Handles the duplicate "Matola A" (id 14) — returns the first match.
+     * Matola A has two rows with identical geometry (ids 1 and 14). The id 1
+     * row is canonical; it is ordered first so the duplicate never changes the
+     * active jurisdiction used for the logical area. Database rows are not
+     * modified.
      */
     private function findBairro(float $longitude, float $latitude): ?array
     {
@@ -168,8 +174,19 @@ class IncidentJurisdictionService
             SELECT id, "Bairro" AS bairro
             FROM "Area de Estudo"
             WHERE ST_Covers(geom, ST_SetSRID(ST_MakePoint(?, ?), 4326))
-            LIMIT 2
-        ', [$longitude, $latitude]);
+            ORDER BY
+                CASE
+                    WHEN id = ? AND TRIM("Bairro") = ? THEN 0
+                    ELSE 1
+                END,
+                id
+            LIMIT 1
+        ', [
+            $longitude,
+            $latitude,
+            self::MATOLA_A_CANONICAL_AREA_ID,
+            self::MATOLA_A_BAIRRO,
+        ]);
 
         if (empty($results)) {
             return null;

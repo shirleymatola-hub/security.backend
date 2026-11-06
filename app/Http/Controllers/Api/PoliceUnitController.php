@@ -5,7 +5,9 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\UnidadePolicia;
 use App\Models\UnitJurisdiction;
+use App\Services\AreaDeEstudoSpatialFilter;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
 class PoliceUnitController extends Controller
@@ -22,10 +24,15 @@ class PoliceUnitController extends Controller
      * - Tutelage station (police_station_id)
      * - Physical bairro (via unidade_policial_bairros)
      */
-    public function index(): JsonResponse
+    public function index(Request $request): JsonResponse
     {
-        $units = UnidadePolicia::with(['policeStation', 'unidadePolicialBairros.areaDeEstudo'])
-            ->get();
+        $query = UnidadePolicia::with(['policeStation', 'unidadePolicialBairros.areaDeEstudo']);
+
+        if ($request->boolean('area_de_estudo')) {
+            AreaDeEstudoSpatialFilter::apply($query, 'geom');
+        }
+
+        $units = $query->get();
 
         $features = [];
 
