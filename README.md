@@ -20,9 +20,38 @@ Todas as rotas têm o prefixo `/api` (ver `routes/api.php`):
 | `routes/api/map.php` | `/api/map/...`, `/api/jurisdictions`, `/api/police-units`, `/api/route`, ... | público (algumas com token) |
 | `routes/api/common.php` | `/api/profile`, `/api/notifications`, `/api/reminders`, `/api/theme`, `/api/locale` | token |
 | `routes/api/<perfil>.php` | `/api/admin/...`, `/api/manager/...`, `/api/police/...`, ... | token + perfil |
-| `routes/internal_api.php` | `/api/internal/...` (integrações externas) | token interno |
+| `routes/api/super_admin.php` | `/api/super-admin/...` (painel Super Admin) | token de super administrador |
+| `routes/internal_api.php` | `/api/internal/...` (integrações externas; `/invite/*` é usado pela página de convites) | token interno |
 
 Erros são sempre devolvidos em JSON (422 com `errors` para validação, 401 sem sessão, 403 sem permissão).
+
+## Painel Super Admin
+
+O antigo projeto separado `super-admin` (Laravel + Blade, com base de dados própria) faz agora parte desta API
+e usa **a mesma base de dados** do SMP. As páginas estão no frontend em `/super-admin/...`.
+
+- Contas em `super_admin_users` (separadas dos utilizadores do SMP), auditoria em `super_admin_audit_logs`.
+- Autenticação por token Sanctum no guard `super_admin` (`config/auth.php`). O guard `sanctum` do SMP só aceita
+  tokens de `User` e o guard `super_admin` só aceita tokens de `SuperAdminUser`: as duas sessões não se misturam.
+- 2FA (Google Authenticator/Authy) com códigos de recuperação, bloqueio após 5 tentativas falhadas, recuperação de
+  password por email (em `APP_ENV=local` a resposta inclui `dev_reset_url`).
+- Os dados operacionais (postos, distritos, bairros, utilizadores, ocorrências, mapa, exportações CSV/Excel/PDF,
+  relatório administrativo) são lidos diretamente dos modelos (`app/Services/SuperAdmin/OperationalDataService.php`),
+  sem a antiga chamada HTTP à API interna.
+- Configuração em `config/super_admin.php` (duração da sessão, validade dos convites, etc.).
+
+Criar a conta de super administrador (depois de `php artisan migrate`):
+
+```bash
+php artisan super-admin:create                                    # usa SUPER_ADMIN_NAME/EMAIL/PASSWORD do .env
+php artisan super-admin:create --email=admin@smp.gov --name="Nome" # sem password: gera uma e mostra-a
+php artisan super-admin:create --email=admin@smp.gov --reset       # redefine a password de uma conta existente
+```
+
+No Render, se `SUPER_ADMIN_EMAIL` e `SUPER_ADMIN_PASSWORD` estiverem definidos, a conta é criada no arranque
+(apenas se ainda não existir).
+
+Testes do painel (SQLite em memória, não precisam de PostgreSQL): `php vendor/bin/phpunit tests/Feature/SuperAdminAuthTest.php`.
 
 ## Desenvolvimento local
 
@@ -73,6 +102,7 @@ migrations** — foram importadas à parte. Por isso a forma correta de passar p
    - `DB_URL` — connection string da Neon
    - `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI` = `https://smp-backend.onrender.com/api/auth/google/callback`
    - `OPENROUTESERVICE_API_KEY`
+   - `SUPER_ADMIN_EMAIL`, `SUPER_ADMIN_PASSWORD` — conta do painel Super Admin (criada no primeiro arranque)
 4. Na **Google Cloud Console**, adicione o novo URI de redirecionamento
    (`.../api/auth/google/callback`) às credenciais OAuth.
 

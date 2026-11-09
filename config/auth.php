@@ -1,5 +1,6 @@
 <?php
 
+use App\Models\SuperAdminUser;
 use App\Models\User;
 
 return [
@@ -42,6 +43,19 @@ return [
             'driver' => 'session',
             'provider' => 'users',
         ],
+
+        // Tokens Sanctum dos utilizadores do SMP (auth:sanctum). O provider
+        // garante que um token de super administrador não é aceite aqui.
+        'sanctum' => [
+            'driver' => 'sanctum',
+            'provider' => 'users',
+        ],
+
+        // Painel Super Admin (/api/super-admin/*): só aceita tokens de SuperAdminUser.
+        'super_admin' => [
+            'driver' => 'sanctum',
+            'provider' => 'super_admin_users',
+        ],
     ],
 
     /*
@@ -65,6 +79,11 @@ return [
         'users' => [
             'driver' => 'eloquent',
             'model' => env('AUTH_MODEL', User::class),
+        ],
+
+        'super_admin_users' => [
+            'driver' => 'eloquent',
+            'model' => SuperAdminUser::class,
         ],
 
         // 'users' => [

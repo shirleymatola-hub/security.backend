@@ -18,4 +18,9 @@ if [ "${RUN_MIGRATIONS:-true}" = "true" ]; then
     php artisan migrate --force
 fi
 
+# Painel Super Admin: cria a conta na primeira vez (não altera uma conta existente).
+if [ -n "${SUPER_ADMIN_EMAIL}" ] && [ -n "${SUPER_ADMIN_PASSWORD}" ]; then
+    php artisan super-admin:create || true
+fi
+
 exec apache2-foreground

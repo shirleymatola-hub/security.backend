@@ -24,6 +24,9 @@ require __DIR__ . '/api/public.php';
 // Dados do mapa (camadas, estações, rotas). Algumas rotas exigem token.
 require __DIR__ . '/api/map.php';
 
+// Painel Super Admin (/api/super-admin/...): autenticação própria (guard super_admin)
+require __DIR__ . '/api/super_admin.php';
+
 // Rotas que exigem utilizador autenticado
 Route::middleware('auth:sanctum')->group(function () {
     // Comuns a todos os perfis: perfil, notificações, lembretes, tema, idioma

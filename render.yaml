@@ -83,3 +83,12 @@ services:
         sync: false
       - key: SMS_HTTP_TOKEN
         sync: false
+
+      # Painel Super Admin (/super-admin no frontend). A conta é criada no
+      # arranque se não existir; depois pode remover SUPER_ADMIN_PASSWORD.
+      - key: SUPER_ADMIN_NAME
+        value: Super Administrator
+      - key: SUPER_ADMIN_EMAIL
+        sync: false
+      - key: SUPER_ADMIN_PASSWORD
+        sync: false

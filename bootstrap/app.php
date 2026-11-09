@@ -25,6 +25,7 @@ return Application::configure(basePath: dirname(__DIR__))
             'set-locale' => \App\Http\Middleware\SetLocale::class,
             'internal_api' => \App\Http\Middleware\InternalApiAuth::class,
             'check_lockout' => \App\Http\Middleware\CheckAccountLockout::class,
+            'super_admin.active' => \App\Http\Middleware\EnsureSuperAdminIsActive::class,
         ]);
         $middleware->api(prepend: [
             \App\Http\Middleware\UseSanctumGuard::class,

@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\AuditLog;
+use App\Models\User;
 use Illuminate\Http\Request;
 
 class AuditService
@@ -33,8 +34,12 @@ class AuditService
     ): AuditLog {
         $request = $request ?? request();
 
+        // audit_logs.user_id referencia a tabela users: ações feitas no painel
+        // Super Admin (guard super_admin) ficam sem utilizador SMP associado.
+        $authUser = auth()->user();
+
         return AuditLog::create([
-            'user_id' => $userId ?? auth()->id(),
+            'user_id' => $userId ?? ($authUser instanceof User ? $authUser->id : null),
             'event' => $event,
             'entity_type' => $entityType,
             'entity_id' => $entityId,
