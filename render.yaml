@@ -89,6 +89,6 @@ services:
       - key: SUPER_ADMIN_NAME
         value: Super Administrator
       - key: SUPER_ADMIN_EMAIL
-        sync: false
+        value: superadmin@smp.gov
       - key: SUPER_ADMIN_PASSWORD
         sync: false
