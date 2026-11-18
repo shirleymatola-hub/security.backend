@@ -3,8 +3,8 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Services\AreaDeEstudoService;
 use Illuminate\Http\JsonResponse;
-use Illuminate\Support\Facades\DB;
 
 class AreaDeEstudoController extends Controller
 {
@@ -15,9 +15,9 @@ class AreaDeEstudoController extends Controller
      * so the popup shows the parent esquadra name rather than the sub-unit.
      */
     private const DISPLAY_NAME_OVERRIDES = [
-        'Fomento'      => '3ª Esquadra PRM Matola',
-        'Liberdade'    => '4ª Esquadra da Liberdade',
-        'Matola G'     => 'Posto Policial de Matola G',
+        'Fomento' => '3ª Esquadra PRM Matola',
+        'Liberdade' => '4ª Esquadra da Liberdade',
+        'Matola G' => 'Posto Policial de Matola G',
         'Mussumbuluco' => 'Posto de Mussumbuluco',
     ];
 
@@ -28,6 +28,8 @@ class AreaDeEstudoController extends Controller
         'Matola D' => 'Avenida das Indústrias',
     ];
 
+    public function __construct(private readonly AreaDeEstudoService $areaDeEstudoService) {}
+
     /**
      * Clean a police station/unit name for display in popups.
      *
@@ -37,71 +39,36 @@ class AreaDeEstudoController extends Controller
     private static function cleanDisplayName(string $name): string
     {
         $parts = explode(' - ', $name, 2);
+
         return $parts[0];
     }
 
     /**
      * Get all areas from "Area de Estudo" as GeoJSON FeatureCollection.
      *
+     * Duplicate bairros (currently Matola A ids 1 and 14) are presented once,
+     * using the canonical id while keeping all original records in the database.
      * Each Feature contains the bairro polygon geometry and relevant properties,
      * including the responsible police unit determined from existing
      * jurisdictions (primary) and unit_jurisdictions (fallback) relationships.
      */
     public function index(): JsonResponse
     {
-        $rows = DB::select('SELECT * FROM "Area de Estudo" ORDER BY id');
-
-        $unitJurRows = DB::select('
-            SELECT uj.area_estudo_id, up.unidade_policial
-            FROM unit_jurisdictions uj
-            JOIN "unidades policiais" up ON up.id = uj.unidade_policial_id
-            WHERE uj.is_active = true
-        ');
-        $unitJurMap = [];
-        foreach ($unitJurRows as $uj) {
-            if (!isset($unitJurMap[$uj->area_estudo_id])) {
-                $unitJurMap[$uj->area_estudo_id] = [];
-            }
-            $unitJurMap[$uj->area_estudo_id][] = $uj->unidade_policial;
-        }
-
-        $jurRows = DB::select('
-            SELECT j.area_estudo_id, ps.name
-            FROM jurisdictions j
-            JOIN police_stations ps ON ps.id = j.police_station_id
-            WHERE j.is_active = true
-        ');
-        $jurMap = [];
-        foreach ($jurRows as $j) {
-            if (!isset($jurMap[$j->area_estudo_id])) {
-                $jurMap[$j->area_estudo_id] = [];
-            }
-            $jurMap[$j->area_estudo_id][] = $j->name;
-        }
+        $rows = $this->areaDeEstudoService->canonicalAreas();
+        $unitJurMap = $this->areaDeEstudoService->unitNamesByCanonicalArea();
+        $jurMap = $this->areaDeEstudoService->stationNamesByCanonicalArea();
 
         $features = [];
         $bairroJurisdictionMap = [];
 
         foreach ($rows as $row) {
-            $geometry = null;
-
-            if ($row->geom !== null) {
-                $geojson = DB::selectOne(
-                    'SELECT ST_AsGeoJSON(geom) AS geojson FROM "Area de Estudo" WHERE id = ?',
-                    [$row->id]
-                );
-
-                if ($geojson && $geojson->geojson) {
-                    $geometry = json_decode($geojson->geojson, true);
-                }
-            }
+            $areaId = (int) $row['id'];
+            $bairroName = (string) $row['Bairro'];
+            $geometry = $this->areaDeEstudoService->geometry($areaId);
 
             if ($geometry === null) {
                 continue;
             }
-
-            $areaId = $row->id;
-            $bairroName = $row->Bairro;
 
             $unitNames = $unitJurMap[$areaId] ?? [];
             $stationNames = $jurMap[$areaId] ?? [];
@@ -120,25 +87,27 @@ class AreaDeEstudoController extends Controller
 
             $features[] = [
                 'type' => 'Feature',
-                'id' => $row->id,
+                'id' => $areaId,
                 'geometry' => $geometry,
                 'properties' => [
-                    'id' => $row->id,
-                    'cod_bairro' => $row->CodBairro,
+                    'id' => $areaId,
+                    'cod_bairro' => $row['CodBairro'],
                     'bairro' => $bairroName,
-                    'cod_local' => $row->CodLocal,
-                    'localidade' => $row->Localidade,
-                    'cod_posto' => $row->CodPost,
-                    'posto' => $row->Posto,
-                    'cod_distrito' => $row->CodDist,
-                    'distrito' => $row->Distrito,
-                    'cod_provincia' => $row->CodProv,
-                    'provincia' => $row->Provincia,
+                    'cod_local' => $row['CodLocal'],
+                    'localidade' => $row['Localidade'],
+                    'cod_posto' => $row['CodPost'],
+                    'posto' => $row['Posto'],
+                    'cod_distrito' => $row['CodDist'],
+                    'distrito' => $row['Distrito'],
+                    'cod_provincia' => $row['CodProv'],
+                    'provincia' => $row['Provincia'],
                     'unidade_policial_responsavel' => $responsibleUnit,
+                    'source_ids' => $row['source_ids'],
+                    'is_canonical' => true,
                 ],
             ];
 
-            if (!isset($bairroJurisdictionMap[$bairroName])) {
+            if (! isset($bairroJurisdictionMap[$bairroName])) {
                 $bairroJurisdictionMap[$bairroName] = [];
             }
             $bairroJurisdictionMap[$bairroName][] = count($features) - 1;
@@ -174,6 +143,7 @@ class AreaDeEstudoController extends Controller
             if (isset(self::DISPLAY_NAME_OVERRIDES[$bairroName])) {
                 $props['unidade_policial_responsavel'] = self::DISPLAY_NAME_OVERRIDES[$bairroName];
                 unset($props);
+
                 continue;
             }
 
@@ -197,6 +167,10 @@ class AreaDeEstudoController extends Controller
         return response()->json([
             'type' => 'FeatureCollection',
             'features' => $features,
+            'metadata' => [
+                'source_table' => 'Area de Estudo',
+                'distinct_bairros' => count($features),
+            ],
         ]);
     }
 }

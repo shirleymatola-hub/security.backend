@@ -76,6 +76,7 @@ Route::prefix('super-admin')->name('super-admin.')->group(function () {
         Route::get('/operational-users/{id}', [OperationalUserController::class, 'show'])->whereNumber('id')->name('operational-users.show');
 
         Route::get('/map', [CentralMapController::class, 'index'])->name('map');
+        Route::get('/map/infraestruturas', [CentralMapController::class, 'infraestruturas'])->name('map.infraestruturas');
         Route::get('/search', [GlobalSearchController::class, 'search'])->name('search');
 
         // Exportações (CSV, Excel, PDF) e relatório administrativo

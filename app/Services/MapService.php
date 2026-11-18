@@ -29,8 +29,14 @@ class MapService
     /**
      * Get all incidents as GeoJSON for Leaflet
      */
-    public function getIncidentsGeoJson(?int $stationId = null, array $filters = [], ?int $assignedTo = null, bool $withinAreaDeEstudo = false): array
-    {
+    public function getIncidentsGeoJson(
+        ?int $stationId = null,
+        array $filters = [],
+        ?int $assignedTo = null,
+        bool $withinAreaDeEstudo = false,
+        ?int $areaAtuacaoId = null,
+        ?int $areaEstudoId = null
+    ): array {
         $bounds = config('map.bounds');
         $query = Incident::whereNotNull('latitude')
             ->whereNotNull('longitude')
@@ -38,7 +44,17 @@ class MapService
 
         if ($withinAreaDeEstudo) {
             AreaDeEstudoSpatialFilter::apply($query);
-        } elseif ($bounds) {
+        }
+
+        if ($areaEstudoId !== null) {
+            AreaDeEstudoSpatialFilter::applyForArea($query, $areaEstudoId);
+        }
+
+        if ($areaAtuacaoId !== null) {
+            AreaAtuacaoSpatialFilter::apply($query, $areaAtuacaoId);
+        }
+
+        if (! $withinAreaDeEstudo && $areaEstudoId === null && $areaAtuacaoId === null && $bounds) {
             $query->whereBetween('latitude', [$bounds['south_west']['lat'], $bounds['north_east']['lat']])
                 ->whereBetween('longitude', [$bounds['south_west']['lng'], $bounds['north_east']['lng']]);
         }
@@ -220,7 +236,8 @@ class MapService
     {
         $bounds = config('map.bounds');
         $query = Incident::whereNotNull('latitude')
-            ->whereNotNull('longitude');
+            ->whereNotNull('longitude')
+            ->where('is_public', true);
 
         if ($bounds) {
             $query->whereBetween('latitude', [$bounds['south_west']['lat'], $bounds['north_east']['lat']])

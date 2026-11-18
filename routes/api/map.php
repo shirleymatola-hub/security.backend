@@ -53,6 +53,19 @@ Route::name('api.')->group(function () {
     // Area de Estudo - direct from "Area de Estudo" table
     Route::get('/area-de-estudo', [AreaDeEstudoController::class, 'index'])->name('area-de-estudo');
 
+    // Area de Actuacao - direct from "Area de Actuacao" table (public spatial reads)
+    Route::get('/area-de-atuacao/map', [AreaAtuacaoController::class, 'map'])->name('area-de-atuacao.map');
+    Route::get('/area-de-atuacao/locate', [AreaAtuacaoController::class, 'locate'])->name('area-de-atuacao.locate');
+    Route::get('/area-de-atuacao/{area}/incidents', [AreaAtuacaoController::class, 'incidents'])
+        ->whereNumber('area')
+        ->name('area-de-atuacao.incidents');
+    Route::get('/area-de-atuacao/{area}/units', [AreaAtuacaoController::class, 'units'])
+        ->whereNumber('area')
+        ->name('area-de-atuacao.units');
+    Route::get('/area-de-atuacao/{area}', [AreaAtuacaoController::class, 'show'])
+        ->whereNumber('area')
+        ->name('area-de-atuacao.show');
+
     // Authenticated station map
     Route::middleware('auth:sanctum')
         ->get('/map/station/{stationId}', [MapController::class, 'stationIncidents'])

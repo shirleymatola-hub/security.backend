@@ -4,32 +4,141 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\PoliceStation;
+use App\Services\AreaAtuacaoService;
+use App\Services\MapService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 /**
  * AreaAtuacaoController
  *
- * Returns the GeoJSON "Área de atuação" for the authenticated user.
- * The station/unit is derived from the authenticated user — never from request params.
+ * Public endpoints expose the original "Area de Actuacao" polygons and their
+ * spatial relations. The authenticated endpoint remains user-scoped: the
+ * station/unit is derived from the authenticated user, never from request params.
  *
  * For squad_commander / manager / police:
- *   police_station → jurisdictions → Area de Estudo
+ *   police_station → "Area de Actuacao".police_station_id
  *
  * For post_commander:
- *   unidade policial → unit_jurisdictions → Area de Estudo
+ *   unidade policial → unit_jurisdictions → bairros → "Area de Actuacao"
+ *   filtered by the unit's police station where applicable.
  */
 class AreaAtuacaoController extends Controller
 {
+    public function __construct(
+        private readonly AreaAtuacaoService $areaAtuacaoService,
+        private readonly MapService $mapService
+    ) {}
+
+    /**
+     * All Area de Actuacao polygons as GeoJSON.
+     */
+    public function map(): JsonResponse
+    {
+        $geoJson = $this->areaAtuacaoService->geoJson();
+        $bairros = array_values(array_unique(array_map(
+            fn (array $feature) => $feature['properties']['bairro'],
+            $geoJson['features']
+        )));
+
+        $geoJson['metadata'] = [
+            'source_table' => 'Area de Actuacao',
+            'total_areas' => count($geoJson['features']),
+            'distinct_bairros' => count($bairros),
+        ];
+
+        return response()->json($geoJson);
+    }
+
+    /**
+     * A single Area de Actuacao feature, including geometry and metadata.
+     */
+    public function show(int $area): JsonResponse
+    {
+        $feature = $this->areaAtuacaoService->find($area);
+
+        if ($feature === null) {
+            return response()->json(['error' => 'Área de actuação não encontrada.'], 404);
+        }
+
+        return response()->json($feature);
+    }
+
+    /**
+     * Identify the Area(s) de Actuacao covering a coordinate.
+     *
+     * If more than one area covers the point (boundary/overlap), the response
+     * is marked ambiguous and no police station is chosen arbitrarily.
+     */
+    public function locate(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'lat' => ['required', 'numeric', 'between:-90,90'],
+            'lng' => ['required', 'numeric', 'between:-180,180'],
+        ]);
+
+        return response()->json(
+            $this->areaAtuacaoService->findAtPoint((float) $data['lat'], (float) $data['lng'])
+        );
+    }
+
+    /**
+     * Public incidents inside an Area de Actuacao.
+     *
+     * The underlying MapService always filters is_public = true on public
+     * endpoints, regardless of frontend parameters.
+     */
+    public function incidents(int $area): JsonResponse
+    {
+        $feature = $this->areaAtuacaoService->find($area);
+
+        if ($feature === null) {
+            return response()->json(['error' => 'Área de actuação não encontrada.'], 404);
+        }
+
+        $geoJson = $this->mapService->getIncidentsGeoJson(areaAtuacaoId: $area);
+        $geoJson['area_de_atuacao'] = $feature['properties'];
+
+        return response()->json($geoJson);
+    }
+
+    /**
+     * Police units physically located inside an Area de Actuacao.
+     *
+     * This is a spatial report only; it does not change police_station_id.
+     */
+    public function units(int $area): JsonResponse
+    {
+        $feature = $this->areaAtuacaoService->find($area);
+
+        if ($feature === null) {
+            return response()->json(['error' => 'Área de actuação não encontrada.'], 404);
+        }
+
+        $unitFeatures = array_map(function (array $unit): array {
+            return [
+                'type' => 'Feature',
+                'id' => $unit['id'],
+                'geometry' => [
+                    'type' => 'Point',
+                    'coordinates' => [$unit['longitude'], $unit['latitude']],
+                ],
+                'properties' => $unit,
+            ];
+        }, $feature['properties']['units'] ?? []);
+
+        return response()->json([
+            'type' => 'FeatureCollection',
+            'features' => $unitFeatures,
+            'area_de_atuacao' => $feature['properties'],
+        ]);
+    }
+
     /**
      * Get the user's area de atuação as GeoJSON FeatureCollection.
-     *
-     * Response includes:
-     * - features: bairro polygons from "Area de Estudo"
-     * - home_bairro: name of the bairro containing the station/unit
-     * - station_lat / station_lng: coordinates of the station/unit
      */
     public function index(Request $request): JsonResponse
     {
@@ -41,26 +150,14 @@ class AreaAtuacaoController extends Controller
 
         $stationId = $user->police_station_id;
 
-        if (!$stationId) {
-            return response()->json([
-                'type' => 'FeatureCollection',
-                'features' => [],
-                'home_bairro' => null,
-                'station_lat' => null,
-                'station_lng' => null,
-            ]);
+        if (! $stationId) {
+            return $this->buildResponse([], null, null);
         }
 
         $station = PoliceStation::find($stationId);
 
-        if (!$station) {
-            return response()->json([
-                'type' => 'FeatureCollection',
-                'features' => [],
-                'home_bairro' => null,
-                'station_lat' => null,
-                'station_lng' => null,
-            ]);
+        if (! $station) {
+            return $this->buildResponse([], null, null);
         }
 
         if ($user->hasRole('post_commander')) {
@@ -72,27 +169,20 @@ class AreaAtuacaoController extends Controller
 
     /**
      * Get area for squad_commander / manager / police.
-     *
-     * Uses: police_station → jurisdictions (is_active) → Area de Estudo
      */
     private function getStationArea(PoliceStation $station): JsonResponse
     {
-        $jurisdictions = $station->jurisdictions()
-            ->where('jurisdictions.is_active', true)
-            ->with('areaDeEstudo')
-            ->get();
+        $geoJson = $this->areaAtuacaoService->geoJson([(int) $station->id]);
 
-        return $this->buildGeoJsonResponse(
-            $jurisdictions->pluck('areaDeEstudo')->filter(),
-            $station->latitude,
-            $station->longitude
+        return $this->buildResponse(
+            $geoJson['features'],
+            $station->latitude === null ? null : (float) $station->latitude,
+            $station->longitude === null ? null : (float) $station->longitude
         );
     }
 
     /**
      * Get area for post_commander.
-     *
-     * Uses: unidade policial (under this station) → unit_jurisdictions (is_active) → Area de Estudo
      *
      * Identification strategy:
      * 1. Find all units under this station whose physical bairro (via unidade_policial_bairros)
@@ -103,8 +193,8 @@ class AreaAtuacaoController extends Controller
      */
     private function getPostArea(PoliceStation $station): JsonResponse
     {
-        $stationLat = $station->latitude;
-        $stationLng = $station->longitude;
+        $stationLat = $station->latitude === null ? null : (float) $station->latitude;
+        $stationLng = $station->longitude === null ? null : (float) $station->longitude;
 
         $unitId = null;
 
@@ -124,33 +214,23 @@ class AreaAtuacaoController extends Controller
                 $unitId = $matchingUnits[0]->id;
             } else {
                 if (count($matchingUnits) > 1) {
-                    $unitNames = array_map(fn($u) => $u->unidade_policial, $matchingUnits);
-                    \Illuminate\Support\Facades\Log::warning(
-                        "post_commander unit ambiguity for user {$station->commander_id}: " .
-                        count($matchingUnits) . ' units match station coordinates [' .
-                        implode(', ', $unitNames) . ']'
+                    $unitNames = array_map(fn ($u) => $u->unidade_policial, $matchingUnits);
+                    Log::warning(
+                        "post_commander unit ambiguity for user {$station->commander_id}: ".
+                        count($matchingUnits).' units match station coordinates ['.
+                        implode(', ', $unitNames).']'
                     );
                 }
 
-                return response()->json([
-                    'type' => 'FeatureCollection',
-                    'features' => [],
-                    'home_bairro' => null,
-                    'station_lat' => $stationLat,
-                    'station_lng' => $stationLng,
+                return $this->buildResponse([], $stationLat, $stationLng, [
                     'area_available' => false,
                     'message' => 'Não foi possível determinar a unidade policial associada ao utilizador.',
                 ]);
             }
         }
 
-        if (!$unitId) {
-            return response()->json([
-                'type' => 'FeatureCollection',
-                'features' => [],
-                'home_bairro' => null,
-                'station_lat' => $stationLat,
-                'station_lng' => $stationLng,
+        if (! $unitId) {
+            return $this->buildResponse([], $stationLat, $stationLng, [
                 'area_available' => false,
                 'message' => 'Não foi possível determinar a unidade policial associada ao utilizador.',
             ]);
@@ -164,92 +244,59 @@ class AreaAtuacaoController extends Controller
               AND uj.area_estudo_id IS NOT NULL
         ', [$unitId]);
 
-        $ids = array_column($areaEstudoIds, 'area_estudo_id');
+        $ids = array_values(array_unique(array_map(
+            fn ($row) => (int) $row->area_estudo_id,
+            $areaEstudoIds
+        )));
 
         if (empty($ids)) {
-            return response()->json([
-                'type' => 'FeatureCollection',
-                'features' => [],
-                'home_bairro' => null,
-                'station_lat' => $stationLat,
-                'station_lng' => $stationLng,
+            return $this->buildResponse([], $stationLat, $stationLng, [
                 'area_available' => false,
                 'message' => 'A unidade policial não possui jurisdições ativas.',
             ]);
         }
 
         $bairros = DB::select(
-            'SELECT id, "Bairro" AS bairro, "CodBairro" AS cod_bairro FROM "Area de Estudo" WHERE id IN (' . implode(',', array_fill(0, count($ids), '?')) . ')',
+            'SELECT DISTINCT "Bairro" AS bairro FROM "Area de Estudo" WHERE id IN ('
+            .implode(',', array_fill(0, count($ids), '?'))
+            .')',
             $ids
         );
 
-        return $this->buildGeoJsonResponse(
-            collect($bairros),
+        $bairroNames = array_values(array_filter(array_map(
+            fn ($row) => $row->bairro,
+            $bairros
+        )));
+
+        $geoJson = $this->areaAtuacaoService->geoJson([(int) $station->id], $bairroNames);
+
+        return $this->buildResponse(
+            $geoJson['features'],
             $stationLat,
-            $stationLng
+            $stationLng,
+            $geoJson['features'] === []
+                ? [
+                    'area_available' => false,
+                    'message' => 'Não foi possível associar as jurisdições da unidade a uma área de actuação.',
+                ]
+                : []
         );
     }
 
-    /**
-     * Build a GeoJSON FeatureCollection from a collection of bairro records.
-     *
-     * Also determines the home_bairro (bairro containing the station coordinates).
-     */
-    private function buildGeoJsonResponse($bairros, ?float $stationLat, ?float $stationLng): JsonResponse
+    private function buildResponse(array $features, ?float $stationLat, ?float $stationLng, array $extra = []): JsonResponse
     {
-        $features = [];
-        $homeBairro = null;
+        $homeBairro = ($stationLat !== null && $stationLng !== null)
+            ? $this->areaAtuacaoService->homeBairro($stationLat, $stationLng)
+            : null;
 
-        foreach ($bairros as $bairro) {
-            $bairroId = is_object($bairro) ? ($bairro->id ?? null) : null;
-            $bairroName = is_object($bairro) ? ($bairro->bairro ?? null) : null;
-
-            if (!$bairroId || !$bairroName) {
-                continue;
-            }
-
-            $geojson = DB::selectOne(
-                'SELECT ST_AsGeoJSON(geom) AS geojson FROM "Area de Estudo" WHERE id = ?',
-                [$bairroId]
-            );
-
-            if (!$geojson || !$geojson->geojson) {
-                continue;
-            }
-
-            $geometry = json_decode($geojson->geojson, true);
-
-            $features[] = [
-                'type' => 'Feature',
-                'id' => $bairroId,
-                'geometry' => $geometry,
-                'properties' => [
-                    'id' => $bairroId,
-                    'bairro' => $bairroName,
-                    'cod_bairro' => is_object($bairro) ? ($bairro->cod_bairro ?? null) : null,
-                ],
-            ];
-        }
-
-        if ($stationLat && $stationLng && !empty($features)) {
-            $pointWKT = "SRID=4326;POINT({$stationLng} {$stationLat})";
-
-            $home = DB::selectOne(
-                'SELECT "Bairro" AS bairro FROM "Area de Estudo" WHERE ST_Covers(geom, ?) LIMIT 1',
-                [$pointWKT]
-            );
-
-            if ($home) {
-                $homeBairro = $home->bairro;
-            }
-        }
-
-        return response()->json([
+        return response()->json(array_merge([
             'type' => 'FeatureCollection',
             'features' => $features,
             'home_bairro' => $homeBairro,
             'station_lat' => $stationLat,
             'station_lng' => $stationLng,
-        ]);
+            'area_available' => count($features) > 0,
+            'source_table' => 'Area de Actuacao',
+        ], $extra));
     }
 }

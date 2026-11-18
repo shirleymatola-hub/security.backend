@@ -34,7 +34,16 @@ class MapController extends Controller
     {
         $filters = $request->only(['category_id', 'priority', 'status', 'neighborhood']);
         $withinAreaDeEstudo = $request->boolean('area_de_estudo');
-        $geoJson = $this->mapService->getIncidentsGeoJson(null, $filters, null, $withinAreaDeEstudo);
+        $areaEstudoId = $request->filled('area_de_estudo_id') ? $request->integer('area_de_estudo_id') : null;
+        $areaAtuacaoId = $request->filled('area_de_atuacao') ? $request->integer('area_de_atuacao') : null;
+        $geoJson = $this->mapService->getIncidentsGeoJson(
+            null,
+            $filters,
+            null,
+            $withinAreaDeEstudo,
+            $areaAtuacaoId,
+            $areaEstudoId
+        );
 
         return response()->json($geoJson);
     }

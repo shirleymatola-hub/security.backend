@@ -98,7 +98,8 @@ class IncidentService
         ];
     }
 
-    public function getMapData(?int $stationId = null): array
+    /** Mapa operacional: dados das ocorrências, opcionalmente limitados à Área de Estudo. */
+    public function getMapData(?int $stationId = null, bool $withinStudyArea = false): array
     {
         $query = Incident::whereNotNull('latitude')
             ->whereNotNull('longitude')
@@ -117,12 +118,17 @@ class IncidentService
             $query->where('police_station_id', $stationId);
         }
 
+        if ($withinStudyArea) {
+            AreaDeEstudoSpatialFilter::apply($query);
+        }
+
         return $query->with('category:id,name,slug,color,icon')
             ->get()
             ->toArray();
     }
 
-    public function getHeatmapData(?int $stationId = null): array
+    /** Mapa de calor coerente com o filtro territorial aplicado às ocorrências. */
+    public function getHeatmapData(?int $stationId = null, bool $withinStudyArea = false): array
     {
         $query = Incident::whereNotNull('latitude')
             ->whereNotNull('longitude')
@@ -130,6 +136,10 @@ class IncidentService
 
         if ($stationId) {
             $query->where('police_station_id', $stationId);
+        }
+
+        if ($withinStudyArea) {
+            AreaDeEstudoSpatialFilter::apply($query);
         }
 
         return $query->get()->toArray();

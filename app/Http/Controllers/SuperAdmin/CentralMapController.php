@@ -7,6 +7,7 @@ use App\Models\Neighborhood;
 use App\Services\IncidentService;
 use App\Services\MapService;
 use App\Services\SuperAdmin\OperationalDataService;
+use App\Services\SuperAdmin\PoliceInfrastructureService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Log;
 
@@ -16,6 +17,7 @@ class CentralMapController extends Controller
         private OperationalDataService $data,
         private IncidentService $incidents,
         private MapService $map,
+        private PoliceInfrastructureService $infrastructure,
     ) {
     }
 
@@ -60,9 +62,9 @@ class CentralMapController extends Controller
             'category_color' => $item['category']['color'] ?? null,
             'latitude' => (float) $item['latitude'],
             'longitude' => (float) $item['longitude'],
-        ], $this->incidents->getMapData()), [], 'Não foi possível carregar as ocorrências.', $errors);
+        ], $this->incidents->getMapData(withinStudyArea: true)), [], 'Não foi possível carregar as ocorrências.', $errors);
 
-        $heatmap = $this->attempt(fn () => $this->incidents->getHeatmapData(), [], 'Não foi possível carregar o mapa de calor.', $errors);
+        $heatmap = $this->attempt(fn () => $this->incidents->getHeatmapData(withinStudyArea: true), [], 'Não foi possível carregar o mapa de calor.', $errors);
 
         return response()->json([
             'districts' => $districts,
@@ -73,6 +75,20 @@ class CentralMapController extends Controller
             'heatmap' => $heatmap,
             'errors' => array_values(array_unique($errors)),
         ]);
+    }
+
+    /** GET /api/super-admin/map/infraestruturas — infra-estruturas policiais da Área de Estudo. */
+    public function infraestruturas(): JsonResponse
+    {
+        $errors = [];
+        $collection = $this->attempt(
+            fn () => $this->infrastructure->features(true),
+            ['type' => 'FeatureCollection', 'features' => [], 'metadata' => []],
+            'Não foi possível carregar as infra-estruturas policiais.',
+            $errors,
+        );
+
+        return response()->json($collection + ['errors' => array_values(array_unique($errors))]);
     }
 
     /** Executa uma consulta; em caso de erro devolve o valor por omissão e regista a mensagem. */
