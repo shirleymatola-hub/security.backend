@@ -27,6 +27,10 @@ class Jurisdiction extends Model
         'is_active' => 'boolean',
     ];
 
+    protected $hidden = [
+        'source_document',
+    ];
+
     /**
      * O posto policial (esquadra) ao qual esta jurisdição pertence.
      */

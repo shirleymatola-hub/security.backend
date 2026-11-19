@@ -7,14 +7,19 @@ use App\Models\Incident;
 use App\Models\Category;
 use App\Models\Neighborhood;
 use App\Services\AuditService;
-use App\Services\IncidentJurisdictionService;
+use App\Services\IncidentLocationService;
 use App\Services\NotificationService;
 use App\Http\Requests\StoreIncidentRequest;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 
 class IncidentController extends Controller
 {
+    public function __construct(private readonly IncidentLocationService $locationService)
+    {
+    }
+
     public function index(Request $request): JsonResponse
     {
         $query = Incident::where('is_public', true)
@@ -57,19 +62,7 @@ class IncidentController extends Controller
 
     public function store(StoreIncidentRequest $request): JsonResponse
     {
-        $policeStationId = null;
-
-        if ($request->latitude && $request->longitude) {
-            $jurisdictionService = new IncidentJurisdictionService();
-            $jurisdictionResult = $jurisdictionService->determinePoliceStationFromGeometry(
-                (float) $request->longitude,
-                (float) $request->latitude
-            );
-
-            if ($jurisdictionResult['status'] === 'resolved') {
-                $policeStationId = $jurisdictionResult['police_station_id'];
-            }
-        }
+        $location = $this->locationService->resolve($request->latitude, $request->longitude);
 
         $description = $request->description;
         if ($request->hasFile('audio_file')) {
@@ -78,23 +71,38 @@ class IncidentController extends Controller
         }
 
         $referenceCode = Incident::generateReferenceCode();
+        $reportedBy = auth()->id();
+        $isAnonymous = $request->boolean('is_anonymous');
 
-        $incident = Incident::create([
-            'reference_code' => $referenceCode,
-            'title' => 'Ocorrência ' . $referenceCode,
-            'description' => $description,
-            'priority' => $request->priority ?? 'medium',
-            'latitude' => $request->latitude,
-            'longitude' => $request->longitude,
-            'address_detail' => $request->address_detail,
-            'neighborhood' => $request->neighborhood,
-            'neighborhood_id' => $request->neighborhood_id,
-            'police_station_id' => $policeStationId,
-            'incident_date' => \Carbon\Carbon::now(),
-            'reported_by' => auth()->id(),
-            'is_anonymous' => $request->boolean('is_anonymous'),
-            'is_public' => true,
-        ]);
+        $incident = DB::transaction(function () use (
+            $referenceCode,
+            $description,
+            $location,
+            $request,
+            $reportedBy,
+            $isAnonymous
+        ): Incident {
+            $incident = Incident::create([
+                'reference_code' => $referenceCode,
+                'title' => 'Ocorrência ' . $referenceCode,
+                'description' => $description,
+                'priority' => $request->priority ?? 'medium',
+                'latitude' => $location['coordinates']['latitude'],
+                'longitude' => $location['coordinates']['longitude'],
+                'address_detail' => $request->address_detail,
+                'neighborhood' => $this->locationService->bairroIdentificado($location),
+                'neighborhood_id' => $request->neighborhood_id,
+                'police_station_id' => $location['police_station_id'],
+                'incident_date' => \Carbon\Carbon::now(),
+                'reported_by' => $reportedBy,
+                'is_anonymous' => $isAnonymous,
+                'is_public' => true,
+            ]);
+
+            $this->locationService->ensureNoStationForUnresolved($incident, $location);
+
+            return $incident;
+        });
 
         if ($request->hasFile('attachments')) {
             foreach ($request->file('attachments') as $file) {
@@ -123,6 +131,11 @@ class IncidentController extends Controller
                 'priority' => $incident->priority,
                 'status' => $incident->status,
                 'is_anonymous' => $incident->is_anonymous,
+                'location_status' => $location['status'],
+                'bairro' => $this->locationService->bairroIdentificado($location),
+                'bairro_declarado' => $request->neighborhood,
+                'area_de_atuacao_id' => $location['area_de_atuacao_id'],
+                'police_station_id' => $location['police_station_id'],
             ],
         );
 
@@ -131,6 +144,8 @@ class IncidentController extends Controller
         return response()->json([
             'message' => 'Denúncia registada com sucesso. Referência: ' . $incident->reference_code,
             'incident' => $incident,
+            'location_status' => $location['status'],
+            'bairro' => $this->locationService->bairroIdentificado($location),
         ], 201);
     }
 

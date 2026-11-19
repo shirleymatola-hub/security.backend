@@ -32,6 +32,11 @@ return [
         'south_west' => ['lat' => -26.05, 'lng' => 32.35],
         'north_east' => ['lat' => -25.82, 'lng' => 32.56],
     ],
+    'spatial_divergence_audit' => [
+        'A' => [6, 20],
+        'B' => [12, 105, 106, 107, 109, 110, 111, 114, 166],
+        'C' => [7, 11, 13, 14, 15, 22, 24, 26, 27, 29, 120, 122],
+    ],
     // Cores dos marcadores por prioridade
     'marker_colors' => [
         'low' => '#22c55e',

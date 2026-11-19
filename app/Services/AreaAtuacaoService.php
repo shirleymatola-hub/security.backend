@@ -34,6 +34,7 @@ class AreaAtuacaoService
                 aa.layer,
                 aa.path,
                 aa."Shape_Area" AS shape_area,
+                ST_Area(aa.geom::geography) / 1000000.0 AS area_km2,
                 aa.police_station_id,
                 ps.name AS police_station_name,
                 ST_AsGeoJSON('.AreaAtuacaoSpatialFilter::transformedGeometry().') AS geojson
@@ -72,6 +73,7 @@ class AreaAtuacaoService
         $rows = DB::select($sql, $bindings);
         $unitsByArea = $this->unitsInsideAreas();
         $jurisdictionsByBairro = $this->jurisdictionStationsByBairro();
+        $administrativeByBairro = $this->tutelaAdministrativaByBairro();
         $splitBairros = $this->splitBairros();
 
         $features = [];
@@ -86,7 +88,7 @@ class AreaAtuacaoService
                 'type' => 'Feature',
                 'id' => (int) $row->id,
                 'geometry' => $geometry,
-                'properties' => $this->properties($row, $unitsByArea, $jurisdictionsByBairro, $splitBairros),
+                'properties' => $this->properties($row, $unitsByArea, $jurisdictionsByBairro, $administrativeByBairro, $splitBairros),
             ];
         }
 
@@ -119,7 +121,11 @@ class AreaAtuacaoService
             ', [$longitude, $latitude])
         );
 
-        $areas = array_map(function (array $row): array {
+        $administrativeByBairro = $this->tutelaAdministrativaByBairro();
+
+        $areas = array_map(function (array $row) use ($administrativeByBairro): array {
+            $administrative = $this->lookupAdministrative($administrativeByBairro, (string) $row['bairro']);
+
             return [
                 'id' => (int) $row['id'],
                 'bairro' => $row['bairro'],
@@ -128,14 +134,36 @@ class AreaAtuacaoService
                 'police_station_name' => $row['police_station_name'],
                 'layer' => $row['layer'],
                 'path' => $row['path'],
+                'responsabilidade_territorial' => $this->territorialResponsibility($row),
+                'tutela_administrativa' => $administrative,
+                'avisos' => $this->buildAvisos(
+                    $row['police_station_id'] === null ? null : (int) $row['police_station_id'],
+                    $administrative
+                ),
             ];
         }, $rows);
+
+        $single = count($areas) === 1 ? $areas[0] : null;
 
         return [
             'status' => count($areas) === 0 ? 'not_found' : (count($areas) > 1 ? 'ambiguous' : 'matched'),
             'ambiguous' => count($areas) > 1,
             'coordinates' => ['lat' => $latitude, 'lng' => $longitude],
             'areas' => $areas,
+            'responsabilidade_territorial' => $single
+                ? $single['responsabilidade_territorial']
+                : [
+                    'estado' => count($areas) === 0 ? 'sem_area_operacional' : 'ambiguo',
+                    'areas' => array_map(fn (array $area) => $area['responsabilidade_territorial'], $areas),
+                ],
+            'tutela_administrativa' => $single
+                ? $single['tutela_administrativa']
+                : [
+                    'estado' => $single === null && $areas === [] ? 'sem_area_operacional' : 'multiplas_areas',
+                    'fontes' => [],
+                    'estacoes' => [],
+                ],
+            'avisos' => $single ? $single['avisos'] : [],
         ];
     }
 
@@ -236,6 +264,202 @@ class AreaAtuacaoService
         return $result;
     }
 
+    public function administrativeSourcesByStation(int $stationId): array
+    {
+        $jurisdictions = DB::select('
+            SELECT
+                j.id AS source_id,
+                j.police_station_id,
+                ps.name AS police_station_name
+            FROM jurisdictions j
+            JOIN police_stations ps ON ps.id = j.police_station_id
+            WHERE j.police_station_id = ?
+              AND j.is_active = true
+            ORDER BY j.id
+        ', [$stationId]);
+
+        $neighborhoodLinks = DB::select('
+            SELECT
+                n.id AS source_id,
+                ps.id AS police_station_id,
+                ps.name AS police_station_name
+            FROM neighborhood_police_station nps
+            JOIN neighborhoods n ON n.id = nps.neighborhood_id
+            JOIN police_stations ps ON ps.id = nps.police_station_id
+            WHERE nps.police_station_id = ?
+            ORDER BY n.id, ps.id
+        ', [$stationId]);
+
+        return $this->administrativePayload([
+            'jurisdictions' => array_map(static fn ($row) => (array) $row, $jurisdictions),
+            'neighborhood_police_station' => array_map(static fn ($row) => (array) $row, $neighborhoodLinks),
+        ]);
+    }
+
+    private function tutelaAdministrativaByBairro(): array
+    {
+        $jurisdictions = DB::select('
+            SELECT
+                j.id AS source_id,
+                j.police_station_id,
+                ps.name AS police_station_name,
+                ae."Bairro" AS bairro
+            FROM jurisdictions j
+            JOIN "Area de Estudo" ae ON ae.id = j.area_estudo_id
+            JOIN police_stations ps ON ps.id = j.police_station_id
+            WHERE j.is_active = true AND ae."Bairro" IS NOT NULL
+            ORDER BY ae."Bairro", j.id
+        ');
+
+        $neighborhoodLinks = DB::select('
+            SELECT
+                n.id AS source_id,
+                n.name AS bairro,
+                ps.id AS police_station_id,
+                ps.name AS police_station_name
+            FROM neighborhood_police_station nps
+            JOIN neighborhoods n ON n.id = nps.neighborhood_id
+            JOIN police_stations ps ON ps.id = nps.police_station_id
+            ORDER BY n.name, ps.id
+        ');
+
+        $result = [];
+
+        foreach (array_map(static fn ($row) => (array) $row, $jurisdictions) as $row) {
+            $key = $this->bairroKey((string) $row['bairro']);
+            $result[$key]['jurisdictions'][] = $row;
+        }
+
+        foreach (array_map(static fn ($row) => (array) $row, $neighborhoodLinks) as $row) {
+            $key = $this->bairroKey((string) $row['bairro']);
+            $result[$key]['neighborhood_police_station'][] = $row;
+        }
+
+        foreach ($result as $key => $sources) {
+            $result[$key] = $this->administrativePayload($sources);
+        }
+
+        return $result;
+    }
+
+    private function administrativePayload(array $sources): array
+    {
+        $fontes = [];
+        $estacoes = [];
+
+        foreach ($sources as $fonte => $rows) {
+            if ($rows === []) {
+                continue;
+            }
+
+            $registos = [];
+            foreach ($rows as $row) {
+                $stationId = isset($row['police_station_id']) && $row['police_station_id'] !== null
+                    ? (int) $row['police_station_id']
+                    : null;
+
+                if ($stationId !== null && ! isset($estacoes[$stationId])) {
+                    $estacoes[$stationId] = [
+                        'police_station_id' => $stationId,
+                        'police_station_name' => $row['police_station_name'] ?? null,
+                    ];
+                }
+
+                $registos[] = [
+                    'source_id' => isset($row['source_id']) ? (int) $row['source_id'] : null,
+                    'police_station_id' => $stationId,
+                    'police_station_name' => $row['police_station_name'] ?? null,
+                ];
+            }
+
+            $fontes[] = [
+                'fonte' => $fonte,
+                'registos' => $registos,
+            ];
+        }
+
+        $estacoes = array_values($estacoes);
+        usort($estacoes, fn (array $left, array $right) => $left['police_station_id'] <=> $right['police_station_id']);
+
+        return [
+            'estado' => $estacoes === [] ? 'sem_registo_administrativo' : 'registos_disponiveis',
+            'fontes' => $fontes,
+            'estacoes' => $estacoes,
+        ];
+    }
+
+    private function lookupAdministrative(array $map, string $bairro): array
+    {
+        return $map[$this->bairroKey($bairro)] ?? [
+            'estado' => 'sem_registo_administrativo',
+            'fontes' => [],
+            'estacoes' => [],
+        ];
+    }
+
+    private function bairroKey(string $bairro): string
+    {
+        $bairro = trim($bairro);
+
+        return function_exists('mb_strtolower') ? mb_strtolower($bairro, 'UTF-8') : strtolower($bairro);
+    }
+
+    private function territorialResponsibility($row): array
+    {
+        $row = (array) $row;
+        $stationId = $row['police_station_id'] ?? null;
+        $stationId = $stationId === null ? null : (int) $stationId;
+        $areaId = (int) ($row['id'] ?? 0);
+
+        return [
+            'estado' => $stationId === null ? 'sem_esquadra_territorial' : 'definida',
+            'police_station_id' => $stationId,
+            'police_station_name' => $stationId === null
+                ? null
+                : $this->cleanDisplayName((string) ($row['police_station_name'] ?? '')),
+            'area_de_atuacao_id' => $areaId,
+            'bairro' => $row['bairro'] ?? null,
+            'fonte' => [
+                'tabela' => 'Area de Actuacao',
+                'campo_geometria' => 'geom',
+                'source_id' => $areaId,
+                'campo_esquadra' => 'police_station_id',
+            ],
+        ];
+    }
+
+    private function buildAvisos(?int $territorialStationId, array $administrative): array
+    {
+        $avisos = [];
+        $stationIds = array_values(array_filter(array_column($administrative['estacoes'] ?? [], 'police_station_id')));
+        $distinctStationIds = array_values(array_unique($stationIds));
+
+        if ($territorialStationId !== null && $distinctStationIds !== [] && ! in_array($territorialStationId, $distinctStationIds, true)) {
+            $avisos[] = [
+                'tipo' => 'divergencia_territorial',
+                'mensagem' => 'A esquadra indicada pelo polígono difere das esquadras registadas administrativamente.',
+                'fonte' => 'Area de Actuacao',
+            ];
+        }
+
+        if (count($distinctStationIds) > 1) {
+            $avisos[] = [
+                'tipo' => 'divergencia_administrativa',
+                'mensagem' => 'Existem registos administrativos divergentes para este bairro.',
+                'fontes' => array_column($administrative['fontes'] ?? [], 'fonte'),
+            ];
+        }
+
+        if (count($distinctStationIds) > 1 || $distinctStationIds === []) {
+            $avisos[] = [
+                'tipo' => 'informacao_pendente_confirmacao',
+                'mensagem' => 'A tutela administrativa depende de validação documental.',
+            ];
+        }
+
+        return $avisos;
+    }
+
     /**
      * @return array<string, array<int, int>>
      */
@@ -258,6 +482,7 @@ class AreaAtuacaoService
         object $row,
         array $unitsByArea,
         array $jurisdictionsByBairro,
+        array $administrativeByBairro,
         array $splitBairros
     ): array {
         $areaId = (int) $row->id;
@@ -265,6 +490,7 @@ class AreaAtuacaoService
         $stationId = $row->police_station_id === null ? null : (int) $row->police_station_id;
         $units = $unitsByArea[$areaId] ?? [];
         $jurisdictions = $jurisdictionsByBairro[$bairro] ?? [];
+        $administrative = $this->lookupAdministrative($administrativeByBairro, $bairro);
         $warnings = [];
 
         if (isset($splitBairros[$bairro])) {
@@ -313,11 +539,15 @@ class AreaAtuacaoService
             'layer' => $row->layer,
             'path' => $row->path,
             'shape_area' => $row->shape_area === null ? null : (float) $row->shape_area,
+            'area_km2' => $row->area_km2 === null ? null : round((float) $row->area_km2, 2),
             'source_table' => 'Area de Actuacao',
             'split_area_ids' => $splitBairros[$bairro] ?? [],
             'is_split_bairro' => isset($splitBairros[$bairro]),
             'units' => $units,
             'jurisdiction_stations' => $jurisdictions,
+            'responsabilidade_territorial' => $this->territorialResponsibility($row),
+            'tutela_administrativa' => $administrative,
+            'avisos' => $this->buildAvisos($stationId, $administrative),
             'warnings' => array_values(array_unique($warnings)),
         ];
     }

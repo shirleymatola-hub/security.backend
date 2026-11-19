@@ -8,6 +8,7 @@ use App\Models\Incident;
 use App\Models\Neighborhood;
 use App\Models\User;
 use App\Services\SuperAdmin\OperationalDataService;
+use App\Services\SuperAdmin\SubunidadePoliciaService;
 use Barryvdh\DomPDF\Facade\Pdf;
 use Illuminate\Http\Request;
 use Maatwebsite\Excel\Facades\Excel;
@@ -15,13 +16,14 @@ use Symfony\Component\HttpFoundation\Response;
 
 /**
  * GET /api/super-admin/export/{type}/{format}
- * type: stations | districts | neighborhoods | users | citizens | incidents
+ * type: stations | subunidades | districts | neighborhoods | users | citizens | incidents
  * format: csv | excel | pdf
  */
 class ExportController extends Controller
 {
     private const TITLES = [
         'stations' => ['postos-policiais', 'Postos Policiais'],
+        'subunidades' => ['subunidades-policiais', 'Subunidades Policiais'],
         'districts' => ['distritos', 'Distritos'],
         'neighborhoods' => ['bairros', 'Bairros'],
         'users' => ['utilizadores-operacionais', 'Utilizadores Operacionais'],
@@ -43,14 +45,24 @@ class ExportController extends Controller
         'low' => 'Baixa',
     ];
 
-    public function __construct(private OperationalDataService $data)
-    {
+    private const ESQUADRA_DESIGNACOES = [
+        2 => '1.ª Esquadra PRM Matola',
+        10 => '2.ª Esquadra PRM Matola',
+        11 => '3.ª Esquadra PRM Matola',
+        7 => '4.ª Esquadra PRM Liberdade',
+    ];
+
+    public function __construct(
+        private OperationalDataService $data,
+        private SubunidadePoliciaService $subunidades,
+    ) {
     }
 
     public function export(Request $request, string $type, string $format): Response
     {
         $data = match ($type) {
             'stations' => $this->stations(),
+            'subunidades' => $this->subunidades(),
             'districts' => $this->districts(),
             'neighborhoods' => $this->neighborhoods(),
             'users' => $this->users($request),
@@ -84,6 +96,56 @@ class ExportController extends Controller
                 $s['incidents_count'] ?? 0,
                 $s['phone'] ?? '',
                 $s['email'] ?? '',
+            ];
+        }
+
+        return compact('headers', 'rows');
+    }
+
+    private function designacaoEsquadra(array $unit): string
+    {
+        $id = $unit['esquadra_administrativa_id'] ?? null;
+
+        if ($id !== null && isset(self::ESQUADRA_DESIGNACOES[$id])) {
+            return self::ESQUADRA_DESIGNACOES[$id];
+        }
+
+        return trim((string) ($unit['esquadra_administrativa'] ?? ''));
+    }
+
+    private function nomeApresentado(array $unit): string
+    {
+        return $unit['tipo'] === 'esquadra'
+            ? ($this->designacaoEsquadra($unit) ?: (string) $unit['nome'])
+            : (string) $unit['nome'];
+    }
+
+    private function esquadraDeTutela(array $unit): string
+    {
+        return $unit['tipo'] === 'posto'
+            ? ($this->designacaoEsquadra($unit) ?: '—')
+            : '—';
+    }
+
+    private function subunidades(): array
+    {
+        $headers = ['Nº', 'ID', 'Nome da Subunidade', 'Tipo', 'Esquadra de Tutela', 'Associação Administrativa', 'Bairro(s) Físico(s)', 'Localização', 'Área de Actuação', 'Latitude', 'Longitude', 'Contacto'];
+
+        $rows = [];
+        foreach ($this->subunidades->all(true) as $unit) {
+            $rows[] = [
+                $unit['numero'],
+                $unit['id'],
+                $this->nomeApresentado($unit),
+                $unit['tipo_label'],
+                $this->esquadraDeTutela($unit),
+                $this->designacaoEsquadra($unit),
+                implode(', ', $unit['bairros_fisicos']),
+                $unit['localizacao_referencia'] ?? '',
+                $unit['area_atuacao'] ?? '',
+                $unit['latitude'] ?? '',
+                $unit['longitude'] ?? '',
+                $unit['contacto'] ?? '',
             ];
         }
 

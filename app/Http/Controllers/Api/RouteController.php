@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Services\AreaAtuacaoService;
 use App\Services\IncidentJurisdictionService;
 use App\Services\OpenRouteService;
 use Illuminate\Http\JsonResponse;
@@ -13,7 +14,8 @@ use App\Models\PoliceStation;
 class RouteController extends Controller
 {
     public function __construct(
-        protected OpenRouteService $routeService
+        protected OpenRouteService $routeService,
+        protected AreaAtuacaoService $areaAtuacaoService
     ) {
     }
 
@@ -81,9 +83,8 @@ class RouteController extends Controller
             ->get();
 
         // Marca a(s) esquadra(s) com jurisdição sobre o ponto, para a interface as destacar.
-        $responsibleIds = $this->responsibleStationIds(
-            $jurisdictions->determinePoliceStationFromGeometry($lng, $lat)
-        );
+        $result = $jurisdictions->determinePoliceStationFromGeometry($lng, $lat);
+        $responsibleIds = $this->responsibleStationIds($result);
 
         return response()->json([
             'stations' => $stations->map(fn($s) => $this->formatStation($s) + [
@@ -91,6 +92,8 @@ class RouteController extends Controller
             ])->values(),
             'responsible_station_ids' => $responsibleIds,
             'query' => ['lat' => $lat, 'lng' => $lng],
+            'responsabilidade_territorial' => $this->areaAtuacaoService->findAtPoint($lat, $lng)['responsabilidade_territorial'],
+            'tutela_administrativa' => $this->administrativeFromJurisdictionResult($result),
         ]);
     }
 
@@ -153,7 +156,62 @@ class RouteController extends Controller
             'basis' => $basis,
             'bairro' => $result['bairro'],
             'message' => $messages[$basis],
+            'responsabilidade_territorial' => $this->areaAtuacaoService->findAtPoint($lat, $lng)['responsabilidade_territorial'],
+            'tutela_administrativa' => $this->administrativeFromJurisdictionResult($result),
         ]);
+    }
+
+    private function administrativeFromJurisdictionResult(array $result): array
+    {
+        $rawStations = [];
+
+        if ($result['success']) {
+            $rawStations[] = [
+                'source_id' => $result['jurisdiction_id'] ?? null,
+                'police_station_id' => $result['police_station_id'],
+                'police_station_name' => $result['station_name'],
+            ];
+        }
+
+        if ($result['conflict']) {
+            foreach ($result['multiple_jurisdictions'] as $jurisdiction) {
+                $rawStations[] = [
+                    'source_id' => $jurisdiction['jurisdiction_id'] ?? null,
+                    'police_station_id' => $jurisdiction['police_station_id'] ?? null,
+                    'police_station_name' => $jurisdiction['station_name'] ?? null,
+                ];
+            }
+        }
+
+        $estacoes = [];
+        foreach ($rawStations as $station) {
+            if ($station['police_station_id'] === null) {
+                continue;
+            }
+            $id = (int) $station['police_station_id'];
+            $estacoes[$id] = [
+                'police_station_id' => $id,
+                'police_station_name' => $station['police_station_name'],
+            ];
+        }
+
+        $estacoes = array_values($estacoes);
+        usort($estacoes, fn (array $left, array $right) => $left['police_station_id'] <=> $right['police_station_id']);
+
+        return [
+            'estado' => $result['success']
+                ? 'definida'
+                : ($result['conflict'] ? 'divergente' : 'sem_registo_administrativo'),
+            'fontes' => [[
+                'fonte' => 'jurisdictions',
+                'registos' => array_map(static fn (array $station) => [
+                    'source_id' => $station['source_id'] ?? null,
+                    'police_station_id' => $station['police_station_id'],
+                    'police_station_name' => $station['police_station_name'],
+                ], $rawStations),
+            ]],
+            'estacoes' => $estacoes,
+        ];
     }
 
     /** Esquadras ativas com a distância (m) ao ponto indicado. */

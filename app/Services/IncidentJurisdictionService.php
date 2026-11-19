@@ -35,8 +35,8 @@ use Illuminate\Support\Facades\Log;
  * comando, ou confirmação de campo devidamente documentada). A fonte deve ser registada em
  * jurisdictions.source_document e, quando apropriado, em effective_date e description.
  *
- * A arquitetura actual permite que o conflito seja resolvido futuramente sem reconstruir o
- * sistema: basta actualizar as geometrias em jurisdictions.geometry e validar os resultados.
+ * A resolução continua a usar o bairro da "Area de Estudo" e os registos activos de
+ * jurisdictions; jurisdictions.geometry não é usada e não deve ser preenchida automaticamente.
  */
 class IncidentJurisdictionService
 {
@@ -57,8 +57,6 @@ class IncidentJurisdictionService
      */
     public function determinePoliceStationFromGeometry(float $longitude, float $latitude): array
     {
-        $pointWkt = "SRID=4326;POINT({$longitude} {$latitude})";
-
         $bairro = $this->findBairro($longitude, $latitude);
 
         if ($bairro === null) {
@@ -162,7 +160,7 @@ class IncidentJurisdictionService
     /**
      * Find the logical bairro (Area de Estudo) that contains the given point.
      *
-     * Uses ST_Covers to check if the bairro polygon covers the incident point.
+     * Uses ST_Covers on a 4326-transformed polygon to check if the bairro polygon covers the incident point.
      * Matola A has two rows with identical geometry (ids 1 and 14). The id 1
      * row is canonical; it is ordered first so the duplicate never changes the
      * active jurisdiction used for the logical area. Database rows are not
@@ -171,15 +169,18 @@ class IncidentJurisdictionService
     private function findBairro(float $longitude, float $latitude): ?array
     {
         $results = DB::select('
-            SELECT id, "Bairro" AS bairro
-            FROM "Area de Estudo"
-            WHERE ST_Covers(geom, ST_SetSRID(ST_MakePoint(?, ?), 4326))
+            SELECT ae.id, ae."Bairro" AS bairro
+            FROM "Area de Estudo" ae
+            WHERE ae.geom IS NOT NULL
+              AND ST_IsValid(ae.geom)
+              AND ST_SRID(ae.geom) > 0
+              AND ST_Covers(ST_Transform(ae.geom, 4326), ST_SetSRID(ST_MakePoint(?, ?), 4326))
             ORDER BY
                 CASE
-                    WHEN id = ? AND TRIM("Bairro") = ? THEN 0
+                    WHEN ae.id = ? AND TRIM(ae."Bairro") = ? THEN 0
                     ELSE 1
                 END,
-                id
+                ae.id
             LIMIT 1
         ', [
             $longitude,

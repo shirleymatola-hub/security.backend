@@ -14,6 +14,7 @@ use App\Http\Controllers\SuperAdmin\ProfileController;
 use App\Http\Controllers\SuperAdmin\ReportController;
 use App\Http\Controllers\SuperAdmin\SettingsController;
 use App\Http\Controllers\SuperAdmin\StationController;
+use App\Http\Controllers\SuperAdmin\SubunidadePoliciaController;
 use App\Http\Controllers\SuperAdmin\TwoFactorController;
 use Illuminate\Support\Facades\Route;
 
@@ -68,6 +69,7 @@ Route::prefix('super-admin')->name('super-admin.')->group(function () {
         // Gestão operacional (só leitura)
         Route::get('/stations', [StationController::class, 'index'])->name('stations.index');
         Route::get('/stations/{id}', [StationController::class, 'show'])->whereNumber('id')->name('stations.show');
+        Route::get('/subunidades-policiais', [SubunidadePoliciaController::class, 'index'])->name('subunidades-policiais.index');
         Route::get('/districts', [DistrictController::class, 'index'])->name('districts.index');
         Route::get('/districts/{id}', [DistrictController::class, 'show'])->whereNumber('id')->name('districts.show');
         Route::get('/neighborhoods', [NeighborhoodController::class, 'index'])->name('neighborhoods.index');
@@ -81,7 +83,7 @@ Route::prefix('super-admin')->name('super-admin.')->group(function () {
 
         // Exportações (CSV, Excel, PDF) e relatório administrativo
         Route::get('/export/{type}/{format}', [ExportController::class, 'export'])
-            ->whereIn('type', ['stations', 'districts', 'neighborhoods', 'users', 'citizens', 'incidents'])
+            ->whereIn('type', ['stations', 'subunidades', 'districts', 'neighborhoods', 'users', 'citizens', 'incidents'])
             ->whereIn('format', ['csv', 'excel', 'pdf'])
             ->name('export');
         Route::get('/reports/generate', [ReportController::class, 'generate'])->name('reports.generate');

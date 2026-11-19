@@ -177,7 +177,9 @@ class AreaAtuacaoController extends Controller
         return $this->buildResponse(
             $geoJson['features'],
             $station->latitude === null ? null : (float) $station->latitude,
-            $station->longitude === null ? null : (float) $station->longitude
+            $station->longitude === null ? null : (float) $station->longitude,
+            [],
+            (int) $station->id
         );
     }
 
@@ -225,7 +227,7 @@ class AreaAtuacaoController extends Controller
                 return $this->buildResponse([], $stationLat, $stationLng, [
                     'area_available' => false,
                     'message' => 'Não foi possível determinar a unidade policial associada ao utilizador.',
-                ]);
+                ], (int) $station->id);
             }
         }
 
@@ -233,7 +235,7 @@ class AreaAtuacaoController extends Controller
             return $this->buildResponse([], $stationLat, $stationLng, [
                 'area_available' => false,
                 'message' => 'Não foi possível determinar a unidade policial associada ao utilizador.',
-            ]);
+            ], (int) $station->id);
         }
 
         $areaEstudoIds = DB::select('
@@ -253,7 +255,7 @@ class AreaAtuacaoController extends Controller
             return $this->buildResponse([], $stationLat, $stationLng, [
                 'area_available' => false,
                 'message' => 'A unidade policial não possui jurisdições ativas.',
-            ]);
+            ], (int) $station->id);
         }
 
         $bairros = DB::select(
@@ -279,17 +281,43 @@ class AreaAtuacaoController extends Controller
                     'area_available' => false,
                     'message' => 'Não foi possível associar as jurisdições da unidade a uma área de actuação.',
                 ]
-                : []
+                : [],
+            (int) $station->id
         );
     }
 
-    private function buildResponse(array $features, ?float $stationLat, ?float $stationLng, array $extra = []): JsonResponse
-    {
+    private function buildResponse(
+        array $features,
+        ?float $stationLat,
+        ?float $stationLng,
+        array $extra = [],
+        ?int $stationId = null
+    ): JsonResponse {
         $homeBairro = ($stationLat !== null && $stationLng !== null)
             ? $this->areaAtuacaoService->homeBairro($stationLat, $stationLng)
             : null;
 
-        return response()->json(array_merge([
+        $detalhe = $extra['message'] ?? null;
+        unset($extra['message']);
+
+        $territorial = count($features) === 1
+            ? $features[0]['properties']['responsabilidade_territorial']
+            : [
+                'estado' => $features === [] ? 'sem_area_operacional' : 'ambiguo',
+                'areas' => array_map(
+                    fn (array $feature) => $feature['properties']['responsabilidade_territorial'],
+                    $features
+                ),
+            ];
+
+        $avisos = count($features) === 1
+            ? $features[0]['properties']['avisos']
+            : ($features === [] ? [[
+                'tipo' => 'sem_area_operacional',
+                'mensagem' => 'Não existe uma Área de Actuação operacional associada a esta unidade policial.',
+            ]] : []);
+
+        $base = [
             'type' => 'FeatureCollection',
             'features' => $features,
             'home_bairro' => $homeBairro,
@@ -297,6 +325,22 @@ class AreaAtuacaoController extends Controller
             'station_lng' => $stationLng,
             'area_available' => count($features) > 0,
             'source_table' => 'Area de Actuacao',
-        ], $extra));
+            'area_status' => $features === [] ? 'sem_area_operacional' : 'area_operacional_disponivel',
+            'responsabilidade_territorial' => $territorial,
+            'tutela_administrativa' => $stationId === null
+                ? ['estado' => 'sem_posto_identificado', 'fontes' => [], 'estacoes' => []]
+                : $this->areaAtuacaoService->administrativeSourcesByStation($stationId),
+            'avisos' => $avisos,
+        ];
+
+        if ($features === []) {
+            $base['message'] = 'Não existe uma Área de Actuação operacional associada a esta unidade policial.';
+        }
+
+        if ($detalhe !== null) {
+            $base['detalhe'] = $detalhe;
+        }
+
+        return response()->json(array_merge($base, $extra));
     }
 }

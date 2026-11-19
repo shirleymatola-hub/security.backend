@@ -5,6 +5,8 @@ namespace App\Http\Controllers\SuperAdmin;
 use App\Http\Controllers\Controller;
 use App\Models\District;
 use App\Models\Incident;
+use App\Models\PoliceStation;
+use App\Models\UnidadePolicia;
 use App\Models\User;
 use App\Services\SuperAdmin\OperationalDataService;
 use Barryvdh\DomPDF\Facade\Pdf;
@@ -22,6 +24,14 @@ class ReportController extends Controller
         $stations = collect($this->data->stations());
         $active = $stations->where('is_active', true)->count();
 
+        $stationsByType = PoliceStation::query()
+            ->selectRaw("coalesce(tipo_posto, 'Não classificado') as label, count(*) as total")
+            ->groupByRaw("coalesce(tipo_posto, 'Não classificado')")
+            ->orderByDesc('total')
+            ->pluck('total', 'label')
+            ->map(fn ($value) => (int) $value)
+            ->all();
+
         $stats = [
             'total_stations' => $stations->count(),
             'active_stations' => $active,
@@ -31,6 +41,8 @@ class ReportController extends Controller
                 ->groupBy(fn ($s) => $s['district_name'] ?? 'Desconhecido')
                 ->map->count()
                 ->all(),
+            'stations_by_type' => $stationsByType,
+            'total_operational_units' => UnidadePolicia::count(),
             'total_districts' => District::count(),
             'total_users' => User::count(),
             'roles' => $this->data->roleCounts(),
@@ -50,6 +62,7 @@ class ReportController extends Controller
         return Pdf::loadView('super-admin.reports.admin-report', [
             'stats' => $stats,
             'generatedAt' => now()->format('d/m/Y H:i:s'),
+            'generatedBy' => auth('super_admin')->user()?->name ?? 'Super-Admin',
         ])->setPaper('a4', 'portrait')->download('relatorio-administrativo-smp.pdf');
     }
 

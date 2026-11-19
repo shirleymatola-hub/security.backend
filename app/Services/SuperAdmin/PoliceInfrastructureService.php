@@ -37,10 +37,21 @@ class PoliceInfrastructureService
             $type = $this->classify($tipoPosto, $name, $unit, $station);
 
             $key = $this->dedupKey($type, (float) $unit->latitude, (float) $unit->longitude);
+            $sourceId = 'unidade-'.$unit->id;
+            $sourceRecord = [
+                'source' => 'unidade',
+                'id' => (int) $unit->id,
+                'unidade_policial' => $unit->unidade_policial,
+            ];
+
             if (isset($seen[$key])) {
+                $target =& $features[$seen[$key]]['properties'];
+                $target['source_ids'][] = $sourceId;
+                $target['source_records'][] = $sourceRecord;
+                unset($target);
                 continue;
             }
-            $seen[$key] = true;
+            $seen[$key] = count($features);
 
             $features[] = [
                 'type' => 'Feature',
@@ -67,6 +78,8 @@ class PoliceInfrastructureService
                         ->values()
                         ->toArray(),
                     'source' => 'unidade',
+                    'source_ids' => [$sourceId],
+                    'source_records' => [$sourceRecord],
                 ]),
             ];
         }
@@ -82,10 +95,21 @@ class PoliceInfrastructureService
 
         foreach ($stationsQuery->get() as $station) {
             $key = $this->dedupKey(self::TIPO_SERNIC, (float) $station->latitude, (float) $station->longitude);
+            $sourceId = 'estacao-'.$station->id;
+            $sourceRecord = [
+                'source' => 'estacao',
+                'id' => (int) $station->id,
+                'unidade_policial' => $station->name,
+            ];
+
             if (isset($seen[$key])) {
+                $target =& $features[$seen[$key]]['properties'];
+                $target['source_ids'][] = $sourceId;
+                $target['source_records'][] = $sourceRecord;
+                unset($target);
                 continue;
             }
-            $seen[$key] = true;
+            $seen[$key] = count($features);
 
             $features[] = [
                 'type' => 'Feature',
@@ -108,6 +132,8 @@ class PoliceInfrastructureService
                     'longitude' => (float) $station->longitude,
                     'physical_bairros' => [],
                     'source' => 'estacao',
+                    'source_ids' => [$sourceId],
+                    'source_records' => [$sourceRecord],
                 ]),
             ];
         }
@@ -122,6 +148,10 @@ class PoliceInfrastructureService
                 'sernic' => $this->countByType($features, self::TIPO_SERNIC),
                 'source_table' => 'unidades policiais + police_stations',
                 'within_study_area' => $onlyStudyArea,
+                'merged_sources' => array_sum(array_map(
+                    fn (array $feature) => count($feature['properties']['source_ids'] ?? []) - 1,
+                    $features
+                )),
             ],
         ];
     }

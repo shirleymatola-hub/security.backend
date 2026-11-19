@@ -6,16 +6,22 @@ use App\Http\Controllers\Controller;
 use App\Models\Incident;
 use App\Models\Neighborhood;
 use App\Services\AuditService;
+use App\Services\IncidentLocationService;
 use App\Services\NotificationService;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 
 /**
  * Denúncia anónima (antigas closures GET/POST /denuncia-anonima do routes/web.php).
  */
 class AnonymousReportController extends Controller
 {
+    public function __construct(private readonly IncidentLocationService $locationService)
+    {
+    }
+
     /**
      * Bairros (com distrito) para o formulário da denúncia anónima.
      */
@@ -43,7 +49,16 @@ class AnonymousReportController extends Controller
             'attachments' => 'nullable|array|max:5',
             'attachments.*' => 'file|mimes:jpg,jpeg,png,webp|max:5120',
             'audio_file' => 'nullable|file|mimes:webm,ogg,wav|max:10240',
+        ], [
+            'latitude.required' => 'A latitude é obrigatória.',
+            'latitude.numeric' => 'A latitude deve ser um número válido.',
+            'latitude.between' => 'A latitude deve estar entre -90 e 90.',
+            'longitude.required' => 'A longitude é obrigatória.',
+            'longitude.numeric' => 'A longitude deve ser um número válido.',
+            'longitude.between' => 'A longitude deve estar entre -180 e 180.',
         ]);
+
+        $location = $this->locationService->resolve($validated['latitude'], $validated['longitude']);
 
         $description = $validated['description'] ?? null;
         if ($request->hasFile('audio_file')) {
@@ -52,22 +67,36 @@ class AnonymousReportController extends Controller
         }
 
         $referenceCode = 'ANON-' . strtoupper(uniqid());
+        $declaredNeighborhood = $validated['neighborhood'] ?? null;
 
-        $incident = Incident::create([
-            'reference_code' => $referenceCode,
-            'title' => 'Denúncia Anónima ' . $referenceCode,
-            'description' => $description,
-            'priority' => 'medium',
-            'status' => 'pending',
-            'latitude' => $validated['latitude'],
-            'longitude' => $validated['longitude'],
-            'address_detail' => $validated['address_detail'] ?? null,
-            'neighborhood' => $validated['neighborhood'] ?? null,
-            'neighborhood_id' => $validated['neighborhood_id'] ?? null,
-            'incident_date' => Carbon::now(),
-            'is_anonymous' => true,
-            'is_public' => true,
-        ]);
+        $incident = DB::transaction(function () use (
+            $referenceCode,
+            $description,
+            $location,
+            $validated,
+            $declaredNeighborhood
+        ): Incident {
+            $incident = Incident::create([
+                'reference_code' => $referenceCode,
+                'title' => 'Denúncia Anónima ' . $referenceCode,
+                'description' => $description,
+                'priority' => 'medium',
+                'status' => 'pending',
+                'latitude' => $location['coordinates']['latitude'],
+                'longitude' => $location['coordinates']['longitude'],
+                'address_detail' => $validated['address_detail'] ?? null,
+                'neighborhood' => $this->locationService->bairroIdentificado($location),
+                'neighborhood_id' => $validated['neighborhood_id'] ?? null,
+                'police_station_id' => $location['police_station_id'],
+                'incident_date' => Carbon::now(),
+                'is_anonymous' => true,
+                'is_public' => true,
+            ]);
+
+            $this->locationService->ensureNoStationForUnresolved($incident, $location);
+
+            return $incident;
+        });
 
         if ($request->hasFile('attachments')) {
             foreach ($request->file('attachments') as $file) {
@@ -94,6 +123,11 @@ class AnonymousReportController extends Controller
                 'category_id' => $incident->category_id,
                 'priority' => $incident->priority,
                 'is_anonymous' => true,
+                'location_status' => $location['status'],
+                'bairro' => $this->locationService->bairroIdentificado($location),
+                'bairro_declarado' => $declaredNeighborhood,
+                'area_de_atuacao_id' => $location['area_de_atuacao_id'],
+                'police_station_id' => $location['police_station_id'],
             ],
         );
 
