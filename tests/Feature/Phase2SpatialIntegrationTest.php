@@ -314,6 +314,75 @@ class Phase2SpatialIntegrationTest extends TestCase
         ));
     }
 
+    public function test_agregacao_espacial_por_bairro_jurisdicao_e_area_de_atuacao(): void
+    {
+        $response = $this->getJson('/api/map/incidents?aggregate=all');
+
+        $response->assertOk();
+
+        $aggregations = $response->json('aggregations');
+
+        $this->assertIsArray($aggregations);
+        $this->assertArrayHasKey('bairro', $aggregations);
+        $this->assertArrayHasKey('jurisdicao', $aggregations);
+        $this->assertArrayHasKey('area_atuacao', $aggregations);
+        $this->assertNotEmpty($aggregations['bairro']);
+        $this->assertNotEmpty($aggregations['jurisdicao']);
+        $this->assertNotEmpty($aggregations['area_atuacao']);
+        $this->assertGreaterThan(0, array_sum(array_column($aggregations['bairro'], 'total')));
+
+        $conflict = collect($aggregations['jurisdicao'])
+            ->firstWhere('police_station', 'Conflito jurisdicional');
+
+        $this->assertNotNull($conflict);
+        $this->assertContains(2, $conflict['police_station_ids']);
+        $this->assertContains(10, $conflict['police_station_ids']);
+
+        $filtered = $this->getJson('/api/map/incidents?aggregate=bairro&status=inexistente');
+
+        $filtered->assertOk();
+        $this->assertSame([], $filtered->json('aggregations.bairro'));
+    }
+
+    public function test_filtro_de_area_respeita_os_limites_configurados_do_mapa(): void
+    {
+        $this->assertSame('smp_55a_descartavel_rw', DB::getDatabaseName());
+        $this->assertSame(1, (int) DB::table('smp_55a_disposable_marker')->count());
+
+        $categoryId = (int) DB::table('categories')->value('id');
+        $reference = 'FORA-LIMITES-55A';
+
+        DB::table('incidents')->insert([
+            'reference_code' => $reference,
+            'title' => 'Ocorrência fora dos limites',
+            'category_id' => $categoryId,
+            'priority' => 'medium',
+            'status' => 'pending',
+            'latitude' => -25.50,
+            'longitude' => 32.50,
+            'incident_date' => now(),
+            'is_public' => true,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        try {
+            foreach (['/api/map/incidents', '/api/map/incidents?area_de_estudo_id=10'] as $uri) {
+                $response = $this->getJson($uri);
+
+                $response->assertOk();
+
+                $references = collect($response->json('features'))
+                    ->pluck('properties.reference_code')
+                    ->all();
+
+                $this->assertNotContains($reference, $references);
+            }
+        } finally {
+            DB::table('incidents')->where('reference_code', $reference)->delete();
+        }
+    }
+
     public function test_infraestruturas_policiais_sao_classificadas_sem_duplicados(): void
     {
         $collection = app(PoliceInfrastructureService::class)->features(true);

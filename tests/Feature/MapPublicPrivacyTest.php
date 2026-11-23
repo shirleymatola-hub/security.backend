@@ -97,6 +97,45 @@ class MapPublicPrivacyTest extends TestCase
         $this->assertNotContains($private->id, $ids);
     }
 
+    public function test_feeds_publicos_ocultam_identificadores_internos(): void
+    {
+        Incident::create([
+            'reference_code' => 'PUBLIC-FIELDS',
+            'title' => 'PUBLIC-FIELDS',
+            'category_id' => $this->category->id,
+            'priority' => 'medium',
+            'status' => 'pending',
+            'latitude' => -25.9692,
+            'longitude' => 32.4539,
+            'incident_date' => now(),
+            'is_public' => true,
+            'reported_by' => 999,
+            'assigned_to' => 888,
+            'police_station_id' => 2,
+            'is_anonymous' => false,
+        ]);
+
+        foreach (['/api/incidents', '/api/public/incidents'] as $uri) {
+            $response = $this->getJson($uri);
+
+            $response->assertOk();
+
+            $item = $uri === '/api/public/incidents'
+                ? $response->json('incidents.data.0')
+                : $response->json('0');
+
+            $this->assertNotNull($item);
+            $this->assertSame('PUBLIC-FIELDS', $item['reference_code']);
+            $this->assertArrayHasKey('title', $item);
+            $this->assertArrayHasKey('latitude', $item);
+            $this->assertArrayHasKey('longitude', $item);
+
+            foreach (['reported_by', 'assigned_to', 'police_station_id', 'is_anonymous'] as $field) {
+                $this->assertArrayNotHasKey($field, $item);
+            }
+        }
+    }
+
     private function incident(bool $isPublic, string $reference, float $latitude, float $longitude): Incident
     {
         return Incident::create([

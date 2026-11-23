@@ -9,9 +9,10 @@ use RuntimeException;
 /**
  * Fail-closed guard for test database connections.
  *
- * Only in-memory SQLite connections are considered disposable. Every other
- * configured connection (including smp_test, smp, super_admin_db and any
- * production database) may only execute read-only statements while tests run.
+ * Only in-memory SQLite connections and explicitly flagged smp_55a_descartavel*
+ * PostgreSQL copies are considered disposable. Every other configured connection
+ * (including smp_test, smp, super_admin_db and any production database) may only
+ * execute read-only statements while tests run.
  */
 final class TestingDatabaseGuard
 {
@@ -81,6 +82,12 @@ final class TestingDatabaseGuard
         $database = (string) ($config['database'] ?? '');
 
         if ($database === ':memory:' || str_contains($database, 'file::memory:')) {
+            return true;
+        }
+
+        if (($config['driver'] ?? null) === 'pgsql'
+            && getenv('SMP_TEST_DISPOSABLE_DB') === '1'
+            && str_starts_with($database, 'smp_55a_descartavel')) {
             return true;
         }
 

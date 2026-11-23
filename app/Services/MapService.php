@@ -54,7 +54,7 @@ class MapService
             AreaAtuacaoSpatialFilter::apply($query, $areaAtuacaoId);
         }
 
-        if (! $withinAreaDeEstudo && $areaEstudoId === null && $areaAtuacaoId === null && $bounds) {
+        if ($bounds) {
             $query->whereBetween('latitude', [$bounds['south_west']['lat'], $bounds['north_east']['lat']])
                 ->whereBetween('longitude', [$bounds['south_west']['lng'], $bounds['north_east']['lng']]);
         }

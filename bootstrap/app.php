@@ -24,6 +24,7 @@ return Application::configure(basePath: dirname(__DIR__))
             'role_or_permission' => \Spatie\Permission\Middleware\RoleOrPermissionMiddleware::class,
             'set-locale' => \App\Http\Middleware\SetLocale::class,
             'internal_api' => \App\Http\Middleware\InternalApiAuth::class,
+            'station.access' => \App\Http\Middleware\EnsureStationAccess::class,
             'check_lockout' => \App\Http\Middleware\CheckAccountLockout::class,
             'super_admin.active' => \App\Http\Middleware\EnsureSuperAdminIsActive::class,
         ]);

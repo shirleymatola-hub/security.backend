@@ -28,6 +28,12 @@ class IncidentController extends Controller
         }
 
         $incidents = $query->latest()->paginate(15)->withQueryString();
+        $incidents->getCollection()->each(fn (Incident $incident) => $incident->makeHidden([
+            'reported_by',
+            'assigned_to',
+            'police_station_id',
+            'is_anonymous',
+        ]));
         $categories = Category::where('is_active', true)->get();
 
         return response()->json([

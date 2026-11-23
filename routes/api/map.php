@@ -67,7 +67,7 @@ Route::name('api.')->group(function () {
         ->name('area-de-atuacao.show');
 
     // Authenticated station map
-    Route::middleware('auth:sanctum')
+    Route::middleware(['auth:sanctum', 'station.access'])
         ->get('/map/station/{stationId}', [MapController::class, 'stationIncidents'])
         ->name('map.station');
 

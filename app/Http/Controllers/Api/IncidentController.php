@@ -32,6 +32,14 @@ class IncidentController extends Controller
         }
         $incidents = $query->latest('incident_date')->get();
 
+        // Ocorrências públicas: não expor identificadores internos nem dados operacionais.
+        $incidents->each(fn (Incident $incident) => $incident->makeHidden([
+            'reported_by',
+            'assigned_to',
+            'police_station_id',
+            'is_anonymous',
+        ]));
+
         return response()->json($incidents);
     }
 

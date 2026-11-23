@@ -4,13 +4,15 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Services\MapService;
+use App\Services\SpatialAggregationService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
 class MapController extends Controller
 {
     public function __construct(
-        protected MapService $mapService
+        protected MapService $mapService,
+        protected SpatialAggregationService $aggregationService
     ) {}
 
     /**
@@ -44,6 +46,19 @@ class MapController extends Controller
             $areaAtuacaoId,
             $areaEstudoId
         );
+
+        $requested = array_values(array_filter(array_map(
+            'trim',
+            explode(',', (string) $request->query('aggregate', ''))
+        )));
+
+        if (in_array('all', $requested, true)) {
+            $requested = ['bairro', 'jurisdicao', 'area_atuacao'];
+        }
+
+        if ($requested !== []) {
+            $geoJson['aggregations'] = $this->aggregationService->aggregate($requested, $filters);
+        }
 
         return response()->json($geoJson);
     }
