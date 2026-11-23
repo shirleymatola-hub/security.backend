@@ -53,10 +53,19 @@ class RouteController extends Controller
 
             return response()->json($geojson);
         } catch (\Exception $e) {
+            $message = $e->getMessage();
+            $status = 502;
+
+            if ($message === 'Serviço de roteamento não configurado.' || $message === 'Serviço de roteamento indisponível.') {
+                $status = 503;
+            } elseif ($message === 'Não foi possível determinar um percurso entre os pontos indicados.') {
+                $status = 422;
+            }
+
             return response()->json([
                 'error' => 'Erro ao calcular rota',
-                'message' => $e->getMessage(),
-            ], 502);
+                'message' => $message,
+            ], $status);
         }
 
     }
@@ -98,14 +107,15 @@ class RouteController extends Controller
     }
 
     /**
-     * Esquadra responsável por um ponto segundo a área de jurisdição (bairro → jurisdição ativa).
+     * Esquadra responsável por um ponto segundo a área de jurisdição (bairro -> jurisdição ativa).
      *
      * basis:
-     *   - jurisdiction           → o bairro tem uma única jurisdição ativa;
-     *   - jurisdiction_conflict  → o bairro tem várias jurisdições (ex.: Matola D): devolve a mais
+     *   - jurisdiction           -> o bairro tem uma única jurisdição ativa;
+     *   - jurisdiction_conflict  -> o bairro tem várias jurisdições (ex.: Matola D): devolve a mais
      *                              próxima dessas esquadras e as restantes em `alternatives`;
-     *   - nearest                → ponto fora da Área de Estudo ou bairro sem jurisdição: usa a
-     *                              esquadra ativa mais próxima.
+     *   - nearest                -> ponto fora da Área de Estudo ou bairro sem jurisdição: usa a
+     *                              esquadra ativa mais próxima (informação de apoio, sem atribuição
+     *                              automática de responsabilidade territorial).
      */
     public function responsibleStation(Request $request, IncidentJurisdictionService $jurisdictions): JsonResponse
     {

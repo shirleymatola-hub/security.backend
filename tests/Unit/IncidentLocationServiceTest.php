@@ -148,6 +148,18 @@ class IncidentLocationServiceTest extends TestCase
         $this->assertNull($result['police_station_id']);
     }
 
+    public function test_missing_territorial_responsibility_does_not_use_jurisdiction_station(): void
+    {
+        $jurisdiction = $this->jurisdictionResult('resolved', 'Matola A', 2);
+        $area = $this->areaResult('not_found', []);
+
+        $result = $this->makeService($jurisdiction, $area)->resolve(-25.96, 32.45);
+
+        $this->assertSame('area_estudo_sem_area_atuacao', $result['status']);
+        $this->assertSame(2, $result['jurisdiction']['police_station_id']);
+        $this->assertNull($result['police_station_id']);
+    }
+
     public function test_ambiguous_area_has_no_station(): void
     {
         $jurisdiction = $this->jurisdictionResult('resolved', 'Bairro X', 3);
