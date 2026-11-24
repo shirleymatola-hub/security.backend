@@ -20,7 +20,7 @@ class CheckAccountLockout
             }
 
             return response()->json([
-                'message' => 'A sua conta está temporariamente bloqueada. Tente novamente mais tarde.',
+                'message' => __('A sua conta está temporariamente bloqueada. Tente novamente mais tarde.'),
             ], 401);
         }
 

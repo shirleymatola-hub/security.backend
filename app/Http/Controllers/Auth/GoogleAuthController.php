@@ -43,8 +43,16 @@ class GoogleAuthController extends Controller
     private const LINK_CACHE_PREFIX = 'google_link:';
     private const LINK_TTL_MINUTES = 15;
 
-    public function redirect(): RedirectResponse
+    public function redirect(): RedirectResponse|JsonResponse
     {
+        if (!$this->isConfigured()) {
+            Log::error('[GOOGLE_OAUTH] redirect blocked: missing configuration');
+
+            return response()->json([
+                'message' => __('Autenticação com Google não está configurada.'),
+            ], 503);
+        }
+
         return Socialite::driver('google')
             ->stateless()
             ->scopes(['openid', 'email', 'profile'])
@@ -53,6 +61,12 @@ class GoogleAuthController extends Controller
 
     public function callback(): RedirectResponse
     {
+        if (!$this->isConfigured()) {
+            Log::error('[GOOGLE_OAUTH] callback blocked: missing configuration');
+
+            return $this->failed(__('Autenticação com Google não está configurada.'));
+        }
+
         try {
             $googleUser = Socialite::driver('google')->stateless()->user();
         } catch (\Exception $e) {
@@ -61,18 +75,18 @@ class GoogleAuthController extends Controller
                 'message' => $e->getMessage(),
             ]);
 
-            return $this->failed('Autenticação com Google falhou. Tente novamente.');
+            return $this->failed(__('Autenticação com Google falhou. Tente novamente.'));
         }
 
         $googleId = $googleUser->getId();
         $email = $googleUser->getEmail();
 
         if (empty($googleId) || empty($email)) {
-            return $this->failed('Dados incompletos recebidos do Google.');
+            return $this->failed(__('Dados incompletos recebidos do Google.'));
         }
 
         if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
-            return $this->failed('Email inválido recebido do Google.');
+            return $this->failed(__('Email inválido recebido do Google.'));
         }
 
         try {
@@ -81,7 +95,7 @@ class GoogleAuthController extends Controller
         } catch (\Exception $e) {
             Log::error('[GOOGLE_OAUTH] user lookup failed', ['message' => $e->getMessage()]);
 
-            return $this->failed('Autenticação com Google falhou. Contacte o administrador.');
+            return $this->failed(__('Autenticação com Google falhou. Contacte o administrador.'));
         }
 
         if ($existingUser) {
@@ -106,11 +120,11 @@ class GoogleAuthController extends Controller
                 newValues: ['email' => $user->email, 'reason' => 'operational_account'],
             );
 
-            return $this->failed('Esta conta não pode ser acedida via Google.');
+            return $this->failed(__('Esta conta não pode ser acedida via Google.'));
         }
 
         if ($user->status !== 'active') {
-            return $this->failed('Conta inativa. Contacte o administrador.');
+            return $this->failed(__('Conta inativa. Contacte o administrador.'));
         }
 
         AuditService::log(
@@ -135,11 +149,11 @@ class GoogleAuthController extends Controller
                 newValues: ['email' => $user->email, 'reason' => 'operational_email_collision'],
             );
 
-            return $this->failed('Este email está associado a uma conta que não pode ser acedida via Google.');
+            return $this->failed(__('Este email está associado a uma conta que não pode ser acedida via Google.'));
         }
 
         if ($user->status !== 'active') {
-            return $this->failed('Conta inativa. Contacte o administrador.');
+            return $this->failed(__('Conta inativa. Contacte o administrador.'));
         }
 
         $key = Str::random(48);
@@ -162,7 +176,7 @@ class GoogleAuthController extends Controller
 
         if (!$pending) {
             return response()->json([
-                'message' => 'Sessão expirada. Inicie o login com Google novamente.',
+                'message' => __('Sessão expirada. Inicie o login com Google novamente.'),
             ], 410);
         }
 
@@ -184,18 +198,18 @@ class GoogleAuthController extends Controller
 
         if (!$pending) {
             throw ValidationException::withMessages([
-                'password' => 'Sessão expirada. Inicie o login com Google novamente.',
+                'password' => __('Sessão expirada. Inicie o login com Google novamente.'),
             ]);
         }
 
         $user = User::find($pending['user_id']);
 
         if (!$user) {
-            throw ValidationException::withMessages(['password' => 'Conta não encontrada.']);
+            throw ValidationException::withMessages(['password' => __('Conta não encontrada.')]);
         }
 
         if (!Hash::check($validated['password'], $user->password)) {
-            throw ValidationException::withMessages(['password' => 'Palavra-passe incorreta.']);
+            throw ValidationException::withMessages(['password' => __('Palavra-passe incorreta.')]);
         }
 
         $user->update([
@@ -245,7 +259,7 @@ class GoogleAuthController extends Controller
                 'email' => $googleUser->getEmail(),
             ]);
 
-            return $this->failed('Não foi possível criar a conta. Contacte o administrador.');
+            return $this->failed(__('Não foi possível criar a conta. Contacte o administrador.'));
         }
 
         AuditService::log(
@@ -290,5 +304,12 @@ class GoogleAuthController extends Controller
     private function isOperationalUser(User $user): bool
     {
         return $user->hasAnyRole(self::OPERATIONAL_ROLES);
+    }
+
+    private function isConfigured(): bool
+    {
+        return filled(config('services.google.client_id'))
+            && filled(config('services.google.client_secret'))
+            && filled(config('services.google.redirect'));
     }
 }

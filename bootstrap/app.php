@@ -3,7 +3,9 @@
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
+use Symfony\Component\HttpFoundation\Response;
 
 return Application::configure(basePath: dirname(__DIR__))
     ->withRouting(
@@ -30,9 +32,9 @@ return Application::configure(basePath: dirname(__DIR__))
         ]);
         $middleware->api(prepend: [
             \App\Http\Middleware\UseSanctumGuard::class,
+            \App\Http\Middleware\SetLocale::class,
         ]);
         $middleware->api(append: [
-            \App\Http\Middleware\SetLocale::class,
             \App\Http\Middleware\CheckAccountLockout::class,
         ]);
         // Pedidos sem token para rotas protegidas: o frontend trata do ecrã de login.
@@ -41,4 +43,28 @@ return Application::configure(basePath: dirname(__DIR__))
     ->withExceptions(function (Exceptions $exceptions): void {
         // Esta aplicação é só API: todos os erros são devolvidos em JSON.
         $exceptions->shouldRenderJsonWhen(fn () => true);
+        $exceptions->respond(function (Response $response, Throwable $exception, Request $request): Response {
+            $status = $response->getStatusCode();
+
+            if (in_array($status, [401, 429], true)) {
+                $data = json_decode((string) $response->getContent(), true);
+
+                if (is_array($data) && isset($data['message']) && is_string($data['message'])) {
+                    $data['message'] = __($data['message']);
+                    $headers = $response->headers->has('Retry-After')
+                        ? ['Retry-After' => $response->headers->get('Retry-After')]
+                        : [];
+
+                    return response()->json($data, $status, $headers);
+                }
+            }
+
+            if ($status !== 500) {
+                return $response;
+            }
+
+            return response()->json([
+                'message' => __('Não foi possível concluir a operação. Tente novamente.'),
+            ], 500);
+        });
     })->create();

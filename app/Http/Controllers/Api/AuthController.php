@@ -39,7 +39,7 @@ class AuthController extends Controller
             );
 
             throw ValidationException::withMessages([
-                'email' => 'A sua conta está temporariamente bloqueada. Tente novamente mais tarde.',
+                'email' => __('A sua conta está temporariamente bloqueada. Tente novamente mais tarde.'),
             ]);
         }
 
@@ -79,7 +79,7 @@ class AuthController extends Controller
             newValues: ['email' => $email],
         );
 
-        throw ValidationException::withMessages(['email' => 'Credenciais inválidas.']);
+        throw ValidationException::withMessages(['email' => __('Credenciais inválidas.')]);
     }
 
     public function register(Request $request): JsonResponse
@@ -136,7 +136,7 @@ class AuthController extends Controller
             $token->delete();
         }
 
-        return response()->json(['message' => 'Sessão terminada.']);
+        return response()->json(['message' => __('Sessão terminada.')]);
     }
 
     /**
@@ -147,7 +147,7 @@ class AuthController extends Controller
         $validated = $request->validate(['email' => 'required|email']);
 
         $response = [
-            'message' => 'Se o email existir no sistema, receberá um código de recuperação.',
+            'message' => __('Se existir uma conta associada a este endereço de e-mail, receberá as instruções de recuperação.'),
         ];
 
         $user = User::where('email', $validated['email'])->first();
@@ -193,12 +193,12 @@ class AuthController extends Controller
             ->first();
 
         if (!$resetRecord) {
-            throw ValidationException::withMessages(['code' => 'Código inválido ou email incorreto.']);
+            throw ValidationException::withMessages(['code' => __('Código inválido ou email incorreto.')]);
         }
 
         if (now()->diffInMinutes($resetRecord->created_at, true) > 60) {
             DB::table('password_reset_tokens')->where('email', $validated['email'])->delete();
-            throw ValidationException::withMessages(['code' => 'Código expirado. Solicite um novo.']);
+            throw ValidationException::withMessages(['code' => __('Código expirado. Solicite um novo.')]);
         }
 
         $token = Str::random(64);
@@ -228,17 +228,19 @@ class AuthController extends Controller
             ->first();
 
         if (!$resetRecord || !Hash::check($validated['token'], $resetRecord->token)) {
-            throw ValidationException::withMessages(['email' => 'Token inválido ou expirado.']);
+            throw ValidationException::withMessages(['email' => __('Token inválido ou expirado.')]);
         }
 
         if (now()->diffInMinutes($resetRecord->created_at, true) > 60) {
             DB::table('password_reset_tokens')->where('email', $validated['email'])->delete();
-            throw ValidationException::withMessages(['email' => 'Token expirado. Solicite um novo.']);
+            throw ValidationException::withMessages(['email' => __('Token expirado. Solicite um novo.')]);
         }
 
         $user = User::where('email', $validated['email'])->first();
         if (!$user) {
-            throw ValidationException::withMessages(['email' => 'Utilizador não encontrado.']);
+            throw ValidationException::withMessages([
+                'email' => __('Não foi possível concluir a redefinição. Solicite um novo código.'),
+            ]);
         }
 
         $user->update(['password' => Hash::make($validated['password'])]);
@@ -253,7 +255,7 @@ class AuthController extends Controller
         );
 
         return response()->json([
-            'message' => 'Palavra-passe redefinida com sucesso. Pode iniciar sessão.',
+            'message' => __('Palavra-passe redefinida com sucesso. Pode iniciar sessão.'),
         ]);
     }
 

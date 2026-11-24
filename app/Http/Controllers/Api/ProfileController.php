@@ -54,7 +54,7 @@ class ProfileController extends Controller
         if (!empty($validated['current_password']) && !empty($validated['new_password'])) {
             if (!Hash::check($validated['current_password'], $user->password)) {
                 throw ValidationException::withMessages([
-                    'current_password' => 'A palavra-passe atual está incorreta.',
+                    'current_password' => __('A palavra-passe atual está incorreta.'),
                 ]);
             }
         }
