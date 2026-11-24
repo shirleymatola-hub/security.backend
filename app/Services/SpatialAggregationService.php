@@ -50,87 +50,202 @@ final class SpatialAggregationService
         [$where, $bindings] = $this->baseWhere($filters);
 
         $rows = DB::select($this->locatedCte($where).',
-            bairro_counts AS (
-                SELECT area_estudo_id, bairro, count(*)::int AS total
-                FROM located
-                GROUP BY area_estudo_id, bairro
+            territory_matches AS (
+                SELECT DISTINCT ON (l.id, aa.police_station_id)
+                    l.id,
+                    aa.id AS area_atuacao_id,
+                    aa.police_station_id AS area_station_id,
+                    aaps.name AS area_station_name
+                FROM located l
+                JOIN "Area de Actuacao" aa
+                  ON aa.geom IS NOT NULL
+                 AND ST_IsValid(aa.geom)
+                 AND ST_SRID(aa.geom) > 0
+                 AND ST_Covers(
+                     ST_Transform(aa.geom, 4326),
+                     ST_SetSRID(ST_MakePoint(l.longitude::double precision, l.latitude::double precision), 4326)
+                 )
+                LEFT JOIN police_stations aaps ON aaps.id = aa.police_station_id
+                ORDER BY l.id, aa.police_station_id, aa.id
+            ),
+            active_jurisdictions AS (
+                SELECT DISTINCT
+                    l.id,
+                    j.id AS jurisdiction_id,
+                    j.police_station_id AS jurisdiction_station_id,
+                    jps.name AS jurisdiction_station_name
+                FROM located l
+                JOIN jurisdictions j
+                  ON j.area_estudo_id = l.area_estudo_id
+                 AND j.is_active = true
+                LEFT JOIN police_stations jps ON jps.id = j.police_station_id
             )
-            SELECT bc.bairro, bc.total,
-                   j.id AS jurisdiction_id, j.name AS jurisdiction_name,
-                   j.police_station_id, ps.name AS police_station
-            FROM bairro_counts bc
-            LEFT JOIN jurisdictions j ON j.area_estudo_id = bc.area_estudo_id AND j.is_active = true
-            LEFT JOIN police_stations ps ON ps.id = j.police_station_id
-            ORDER BY bc.total DESC, bc.bairro ASC, j.id ASC
+            SELECT l.id, l.bairro,
+                   tm.area_atuacao_id, tm.area_station_id, tm.area_station_name,
+                   aj.jurisdiction_id, aj.jurisdiction_station_id, aj.jurisdiction_station_name
+            FROM located l
+            LEFT JOIN territory_matches tm ON tm.id = l.id
+            LEFT JOIN active_jurisdictions aj ON aj.id = l.id
+            ORDER BY l.id, tm.area_atuacao_id, aj.jurisdiction_id
         ', $bindings);
 
-        $byBairro = [];
+        $incidents = [];
 
         foreach ($rows as $row) {
-            $byBairro[$row->bairro][] = $row;
+            $id = (int) $row->id;
+            $incidents[$id] ??= [
+                'id' => $id,
+                'bairro' => (string) $row->bairro,
+                'area_stations' => [],
+                'area_atuacao_ids' => [],
+                'jurisdictions' => [],
+            ];
+
+            if ($row->area_station_id !== null) {
+                $stationId = (int) $row->area_station_id;
+                $incidents[$id]['area_stations'][$stationId] = (string) $row->area_station_name;
+                $incidents[$id]['area_atuacao_ids'][(int) $row->area_atuacao_id] = true;
+            }
+
+            if ($row->jurisdiction_id !== null) {
+                $incidents[$id]['jurisdictions'][(int) $row->jurisdiction_id] = [
+                    'station_id' => $row->jurisdiction_station_id === null ? null : (int) $row->jurisdiction_station_id,
+                    'station' => (string) $row->jurisdiction_station_name,
+                ];
+            }
         }
 
         $aggregated = [];
 
-        foreach ($byBairro as $bairro => $entries) {
-            $active = array_values(array_filter($entries, static fn ($row): bool => $row->jurisdiction_id !== null));
-            $total = (int) $entries[0]->total;
+        foreach ($incidents as $incident) {
+            [$key, $attributes] = $this->classifyIncidentJurisdiction($incident);
 
-            if ($active === []) {
-                $key = 'sem_jurisdicao';
-                $aggregated[$key] ??= [
-                    'police_station_id' => null,
-                    'police_station' => 'Sem jurisdição ativa',
-                    'total' => 0,
-                    'bairros' => [],
-                ];
-                $aggregated[$key]['total'] += $total;
-                $aggregated[$key]['bairros'][] = (string) $bairro;
-
-                continue;
-            }
-
-            if (count($active) > 1) {
-                $key = 'conflito';
-                $stationIds = array_values(array_unique(array_map(
-                    static fn ($row): int => (int) $row->police_station_id,
-                    $active
-                )));
-                sort($stationIds);
-                $aggregated[$key] ??= [
-                    'police_station_id' => null,
-                    'police_station' => 'Conflito jurisdicional',
-                    'total' => 0,
-                    'bairros' => [],
-                    'police_station_ids' => [],
-                ];
-                $aggregated[$key]['total'] += $total;
-                $aggregated[$key]['bairros'][] = (string) $bairro;
-                $aggregated[$key]['police_station_ids'] = array_values(array_unique(array_merge(
-                    $aggregated[$key]['police_station_ids'],
-                    $stationIds
-                )));
-
-                continue;
-            }
-
-            $jurisdiction = $active[0];
-            $key = 'estacao_'.$jurisdiction->police_station_id;
-            $aggregated[$key] ??= [
-                'police_station_id' => (int) $jurisdiction->police_station_id,
-                'police_station' => (string) $jurisdiction->police_station,
+            $aggregated[$key] ??= $attributes + [
                 'total' => 0,
                 'bairros' => [],
-                'jurisdiction_id' => (int) $jurisdiction->jurisdiction_id,
+                'incident_ids' => [],
+                'area_atuacao_ids' => [],
+                'jurisdiction_ids' => [],
+                'police_station_ids' => [],
+                'match_types' => [],
             ];
-            $aggregated[$key]['total'] += $total;
-            $aggregated[$key]['bairros'][] = (string) $bairro;
+
+            $aggregated[$key]['total']++;
+            $aggregated[$key]['bairros'][] = $incident['bairro'];
+            $aggregated[$key]['incident_ids'][] = $incident['id'];
+            $aggregated[$key]['area_atuacao_ids'] = array_merge(
+                $aggregated[$key]['area_atuacao_ids'],
+                array_keys($incident['area_atuacao_ids'])
+            );
+            $aggregated[$key]['jurisdiction_ids'] = array_merge(
+                $aggregated[$key]['jurisdiction_ids'],
+                array_keys($incident['jurisdictions'])
+            );
+            $aggregated[$key]['police_station_ids'] = array_merge(
+                $aggregated[$key]['police_station_ids'],
+                $attributes['police_station_ids']
+            );
+            $aggregated[$key]['match_types'][] = $attributes['match_type'];
         }
 
+        foreach ($aggregated as &$group) {
+            $group['bairros'] = array_values(array_unique($group['bairros']));
+            sort($group['bairros'], SORT_STRING);
+
+            foreach (['incident_ids', 'area_atuacao_ids', 'jurisdiction_ids', 'police_station_ids', 'match_types'] as $field) {
+                $group[$field] = array_values(array_unique($group[$field]));
+                sort($group[$field], SORT_NUMERIC);
+            }
+
+            if (in_array($group['match_types'][0] ?? '', ['ambiguo', 'divergencia', 'sem_correspondencia', 'sem_jurisdicao'], true)) {
+                $group['verification_status'] = 'pendente';
+            }
+        }
+        unset($group);
+
         $result = array_values($aggregated);
-        usort($result, static fn (array $a, array $b): int => [$b['total'], $a['police_station'] ?? ''] <=> [$a['total'], $b['police_station'] ?? '']);
+        usort($result, static fn (array $a, array $b): int => [$b['total'], $a['police_station']] <=> [$a['total'], $b['police_station']]);
 
         return $result;
+    }
+
+    /**
+     * @param array{
+     *     id: int,
+     *     bairro: string,
+     *     area_stations: array<int, string>,
+     *     area_atuacao_ids: array<int, bool>,
+     *     jurisdictions: array<int, array{station_id: int|null, station: string}>
+     * } $incident
+     * @return array{0: string, 1: array<string, mixed>}
+     */
+    private function classifyIncidentJurisdiction(array $incident): array
+    {
+        $areaStationIds = array_keys($incident['area_stations']);
+        $jurisdictionStationIds = [];
+        $jurisdictionIds = [];
+
+        foreach ($incident['jurisdictions'] as $jurisdictionId => $jurisdiction) {
+            $jurisdictionIds[] = $jurisdictionId;
+
+            if ($jurisdiction['station_id'] !== null) {
+                $jurisdictionStationIds[$jurisdiction['station_id']] = $jurisdiction['station_id'];
+            }
+        }
+
+        if ($areaStationIds === []) {
+            return ['pendente', [
+                'police_station_id' => null,
+                'police_station' => 'Pendente de verificação',
+                'police_station_ids' => [],
+                'match_type' => 'sem_correspondencia',
+                'verification_status' => 'pendente',
+            ]];
+        }
+
+        if ($jurisdictionStationIds === []) {
+            return ['sem_jurisdicao', [
+                'police_station_id' => null,
+                'police_station' => 'Sem jurisdição ativa',
+                'police_station_ids' => $areaStationIds,
+                'match_type' => 'sem_jurisdicao',
+                'verification_status' => 'pendente',
+            ]];
+        }
+
+        $matchingStationIds = array_values(array_intersect($areaStationIds, $jurisdictionStationIds));
+
+        if (count($areaStationIds) !== 1 || count($matchingStationIds) !== 1) {
+            return ['conflito', [
+                'police_station_id' => null,
+                'police_station' => 'Conflito jurisdicional',
+                'police_station_ids' => array_values(array_unique(array_merge($areaStationIds, $jurisdictionStationIds))),
+                'match_type' => count($areaStationIds) > 1 ? 'ambiguo' : 'divergencia',
+                'verification_status' => 'pendente',
+            ]];
+        }
+
+        $stationId = $matchingStationIds[0];
+        $stationName = $incident['area_stations'][$stationId];
+        $matchingJurisdictionIds = [];
+
+        foreach ($incident['jurisdictions'] as $jurisdictionId => $jurisdiction) {
+            if ($jurisdiction['station_id'] === $stationId) {
+                $matchingJurisdictionIds[] = $jurisdictionId;
+                $stationName = $jurisdiction['station'];
+            }
+        }
+
+        sort($matchingJurisdictionIds, SORT_NUMERIC);
+
+        return ['estacao_'.$stationId, [
+            'police_station_id' => $stationId,
+            'police_station' => $stationName,
+            'jurisdiction_id' => $matchingJurisdictionIds[0],
+            'police_station_ids' => [$stationId],
+            'match_type' => 'territorial',
+            'verification_status' => 'confirmado',
+        ]];
     }
 
     /** @param array<string, mixed> $filters */
@@ -174,6 +289,11 @@ final class SpatialAggregationService
             }
         }
 
+        if (! empty($filters['jurisdiction_station_id'])) {
+            $conditions[] = PoliceJurisdictionSpatialFilter::existsCondition('i');
+            $bindings[] = (int) $filters['jurisdiction_station_id'];
+        }
+
         $bounds = config('map.bounds');
 
         if (is_array($bounds)) {
@@ -194,6 +314,8 @@ final class SpatialAggregationService
             WITH located AS (
                 SELECT DISTINCT ON (i.id)
                     i.id,
+                    i.latitude,
+                    i.longitude,
                     CASE WHEN ae.id = 14 AND TRIM(ae."Bairro") = \'Matola A\' THEN 1 ELSE ae.id END AS area_estudo_id,
                     TRIM(ae."Bairro") AS bairro
                 FROM incidents i

@@ -335,8 +335,15 @@ class Phase2SpatialIntegrationTest extends TestCase
             ->firstWhere('police_station', 'Conflito jurisdicional');
 
         $this->assertNotNull($conflict);
-        $this->assertContains(2, $conflict['police_station_ids']);
-        $this->assertContains(10, $conflict['police_station_ids']);
+        $this->assertSame(['Matola J'], $conflict['bairros']);
+        $this->assertSame([7, 10], $conflict['police_station_ids']);
+        $this->assertSame('pendente', $conflict['verification_status']);
+
+        $matolaD = collect($aggregations['jurisdicao'])
+            ->filter(fn (array $group): bool => in_array('Matola D', $group['bairros'], true));
+
+        $this->assertCount(2, $matolaD);
+        $this->assertSame([2, 10], $matolaD->pluck('police_station_id')->sort()->values()->all());
 
         $filtered = $this->getJson('/api/map/incidents?aggregate=bairro&status=inexistente');
 

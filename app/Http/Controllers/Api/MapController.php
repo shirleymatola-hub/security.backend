@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Services\MapService;
+use App\Services\PoliceJurisdictionSpatialFilter;
 use App\Services\SpatialAggregationService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -38,13 +39,20 @@ class MapController extends Controller
         $withinAreaDeEstudo = $request->boolean('area_de_estudo');
         $areaEstudoId = $request->filled('area_de_estudo_id') ? $request->integer('area_de_estudo_id') : null;
         $areaAtuacaoId = $request->filled('area_de_atuacao') ? $request->integer('area_de_atuacao') : null;
+        $jurisdictionStationId = $this->jurisdictionStationId($request);
+
+        if ($jurisdictionStationId !== null) {
+            $filters['jurisdiction_station_id'] = $jurisdictionStationId;
+        }
+
         $geoJson = $this->mapService->getIncidentsGeoJson(
             null,
             $filters,
             null,
             $withinAreaDeEstudo,
             $areaAtuacaoId,
-            $areaEstudoId
+            $areaEstudoId,
+            $jurisdictionStationId
         );
 
         $requested = array_values(array_filter(array_map(
@@ -130,6 +138,25 @@ class MapController extends Controller
         }
 
         return response()->json(['error' => 'Localização não encontrada'], 404);
+    }
+
+    private function jurisdictionStationId(Request $request): ?int
+    {
+        if ($request->filled('jurisdiction_station_id')) {
+            $stationId = $request->integer('jurisdiction_station_id');
+
+            return $stationId > 0 ? $stationId : null;
+        }
+
+        if ($request->filled('jurisdiction_id')) {
+            $jurisdictionId = $request->integer('jurisdiction_id');
+
+            return $jurisdictionId > 0
+                ? PoliceJurisdictionSpatialFilter::stationIdForJurisdiction($jurisdictionId)
+                : null;
+        }
+
+        return null;
     }
 
     /**

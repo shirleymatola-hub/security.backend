@@ -35,7 +35,8 @@ class MapService
         ?int $assignedTo = null,
         bool $withinAreaDeEstudo = false,
         ?int $areaAtuacaoId = null,
-        ?int $areaEstudoId = null
+        ?int $areaEstudoId = null,
+        ?int $jurisdictionStationId = null
     ): array {
         $bounds = config('map.bounds');
         $query = Incident::whereNotNull('latitude')
@@ -52,6 +53,10 @@ class MapService
 
         if ($areaAtuacaoId !== null) {
             AreaAtuacaoSpatialFilter::apply($query, $areaAtuacaoId);
+        }
+
+        if ($jurisdictionStationId !== null) {
+            PoliceJurisdictionSpatialFilter::apply($query, $jurisdictionStationId);
         }
 
         if ($bounds) {
